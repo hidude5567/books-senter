@@ -1,11 +1,7 @@
 (function () {
   "use strict";
-
-  /* on-page status/error banner — when something fails, the page SAYS SO
-     instead of silently showing an empty shelf */
-  var bootStatusEl = null;
+  var bootStatusEl = document.getElementById("bootStatus");
   function setBootStatus(text, isError) {
-    if (!bootStatusEl) bootStatusEl = document.getElementById("bootStatus");
     if (!bootStatusEl) return;
     if (!text) { bootStatusEl.hidden = true; return; }
     bootStatusEl.hidden = false;
@@ -13,67 +9,30 @@
     bootStatusEl.classList.toggle("boot-status-error", !!isError);
   }
   window.addEventListener("error", function (e) {
-    setBootStatus("Script error: " + ((e && e.message) || "unknown") + " — tell the site owner this text", true);
+    setBootStatus("Script error: " + ((e && e.message) || "unknown"), true);
   });
   window.addEventListener("unhandledrejection", function (e) {
     var r = e && e.reason;
-    setBootStatus("Error: " + ((r && (r.message || r.error_description)) || String(r)) + " — tell the site owner this text", true);
+    var msg = (r && (r.message || r.error_description || r.msg)) || String(r);
+    setBootStatus("Unhandled error: " + msg, true);
   });
 
-  /* ---------------- constants & utils ---------------- */
-  var MUSIC_FORMATS = ["CD","Vinyl","Cassette","Digital","Other"];
+  var GENRE_SUGGESTIONS = ["Fiction","Nonfiction","Mystery","Science Fiction","Fantasy","Biography","History","Romance","Poetry","Self-Help","Science","Philosophy","Horror","Classic","Young Adult","Graphic Novel","Memoir","Thriller"];
   var MUSIC_GENRE_SUGGESTIONS = ["Rock","Pop","Hip-Hop","Jazz","Classical","Country","Folk","Electronic","R&B","Metal","Punk","Blues","Reggae","Soundtrack","Children's","Holiday","Comedy","Other"];
-  var SPINE_COLORS = ["#C98A4B","#8A5A8E","#4B7A6D","#A85454","#5A7AB0","#B08A3C","#7A6AA8","#4B8A9E"];
+  var MUSIC_FORMATS = ["CD","Vinyl","Cassette","Digital","Other"];
+  var SPINE_COLORS = ["#2F4A3B","#6D2E38","#A8763B","#2B3A55","#4B3350","#1F4A4A","#7A3B2E","#4A4A2B"];
+  var BOOK_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 4.5c2.2-.9 5-1 8 .3V19c-3-1.3-5.8-1.2-8-.3V4.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M20 4.5c-2.2-.9-5-1-8 .3V19c3-1.3 5.8-1.2 8-.3V4.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
   var DISC_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="2.2" stroke="currentColor" stroke-width="1.4"/><path d="M12 3.5a8.5 8.5 0 016.8 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
 
-  function looksLikeDiscogsId(s) { return /^\d+$/.test(String(s || "")); }
-
-  function albumCoverUrl(album) {
-    if (!album) return null;
-    if (album.cover) return album.cover;
-    // albums added before the Discogs switch only have a MusicBrainz id —
-    // their covers still resolve through Cover Art Archive
-    if (album.mbid && !looksLikeDiscogsId(album.mbid)) {
-      return "https://coverartarchive.org/release/" + encodeURIComponent(album.mbid) + "/front-250";
-    }
-    return null;
+  function coverUrl(isbn) {
+    if (!isbn) return null;
+    var clean = String(isbn).replace(/[-\s]/g, "");
+    if (!clean) return null;
+    return "https://covers.openlibrary.org/b/isbn/" + encodeURIComponent(clean) + "-M.jpg?default=false";
   }
-
-  /* Self-healing: albums that came from Discogs but predate the cover
-     column have an id but no stored URL. Fetch each missing cover once
-     (through the proxy, so it works on filtered networks), then save it
-     permanently so it never costs another request. */
-  var coversHealing = false;
-  async function ensureCovers() {
-    if (!db || usingLocalFallback || viewingUserId || coversHealing) return;
-    var need = albums.filter(function (a) {
-      return !a.cover && a.mbid && looksLikeDiscogsId(a.mbid);
-    }).slice(0, 10);
-    if (!need.length) return;
-    coversHealing = true;
-    for (var i = 0; i < need.length; i++) {
-      try {
-        var rel = await fetchDiscogs("/releases/" + need[i].mbid);
-        var img = (rel.images && rel.images.length && (rel.images[0].uri || rel.images[0].resource_url)) || "";
-        if (img) {
-          need[i].cover = img;
-          // quiet persist: no toast, no local-only fallback noise
-          upsertLocalAlbum(need[i]);
-          saveLocalFallback();
-          if (!usingLocalFallback) {
-            await db.from(SUPABASE_ALBUMS_TABLE).upsert({
-              id: need[i].id, title: need[i].title, artist: need[i].artist,
-              format: need[i].format || null, year: need[i].year || null,
-              genre: need[i].genre || null, tracks: (need[i].tracks || []).join("\n"),
-              mbid: need[i].mbid || null, cover: img,
-              added_at: need[i].addedAt, user_id: currentUser ? currentUser.id : null
-            }, { onConflict: "id" });
-          }
-          renderAll();
-        }
-      } catch (e) { /* rate-limited or offline — retries next visit */ }
-    }
-    coversHealing = false;
+  function albumCoverUrl(mbid) {
+    if (!mbid) return null;
+    return "https://coverartarchive.org/release/" + encodeURIComponent(mbid) + "/front-250";
   }
   function hashStr(s) {
     var h = 0;
@@ -90,7 +49,7 @@
     });
   }
   function uid() {
-    return (crypto.randomUUID ? crypto.randomUUID() : "a-" + Date.now() + "-" + Math.random().toString(16).slice(2));
+    return (crypto.randomUUID ? crypto.randomUUID() : "b-" + Date.now() + "-" + Math.random().toString(16).slice(2));
   }
   function showToast(msg) {
     var t = document.getElementById("toast");
@@ -105,79 +64,32 @@
       return res.json();
     });
   }
-  function fetchDiscogs(path, ms) {
-    if (DISCOGS_PROXY) {
-      // proxy mode: server holds the token; only /database/search and
-      // /releases/* are allowed through. Supabase verifies JWT on edge
-      // functions by default, so we send the project's anon key (which is
-      // already public in this file — it's meant for browsers).
-      return fetch(DISCOGS_PROXY + "?path=" + encodeURIComponent(path), {
-        headers: { Authorization: "Bearer " + SUPABASE_ANON_KEY },
-        signal: AbortSignal.timeout(ms || 15000)
-      }).then(function (res) {
-        if (!res.ok) throw new Error("proxy http " + res.status);
-        return res.json();
-      });
-    }
-    var headers = { "User-Agent": "FamilyCatalog/1.0" };
-    if (DISCOGS_TOKEN) headers["Authorization"] = "Discogs token=" + DISCOGS_TOKEN;
-    return fetch(DISCOGS_API + path, {
-      headers: headers,
-      signal: AbortSignal.timeout(ms || 15000)
-    }).then(function (res) {
-      if (res.status === 401) throw new Error("discogs token missing or invalid");
-      if (!res.ok) throw new Error("http " + res.status);
-      return res.json();
-    });
-  }
-  function discogsConfigured() {
-    return !!(DISCOGS_PROXY || DISCOGS_TOKEN);
-  }
 
-  /* ---------------- state ---------------- */
+  var books = [];
   var albums = [];
+  var viewMode = "books";
   var usingLocalFallback = false;
-  var db = null;
-  var currentEditAlbumId = null;
-  /* Manager account: can view any user's shelf and send messages to
-     everyone or specific accounts. Enforced server-side too (see the
-     is_manager() policy in the setup SQL). */
-  var MANAGER_USERNAME = "nolanwsenter";
-
-  var anonLocalKey = "catalog-albums-local-anon-v1";
-  var managerUsers = [];    // [{user_id, username}] — accounts seen in albums
-  var viewingUserId = null; // manager: whose shelf is on screen (null = own)
   var currentUser = null;
-  // Each account gets its OWN browser stash. Without this, two people using
-  // the same device/browser would leak albums into each other's shelves via
-  // the local merge. Logged-out use gets a separate anonymous stash.
-  function localKey() {
-    return currentUser ? "catalog-albums-local-" + currentUser.id + "-v1" : anonLocalKey;
-  }
+  var db = null;
+  var currentEditId = null;
+  var currentEditAlbumId = null;
+  var localKey = "catalog-books-local-v1";
+  var albumsLocalKey = "catalog-albums-local-v1";
+  var booksChannel = null;
   var albumsChannel = null;
 
-  /* ---------------- discogs config ----------------
-     Discogs' database search requires a personal access token (browser
-     apps can't do their OAuth flow without a server). Getting one is free
-     and takes ~3 minutes:
-       1. Log in at discogs.com
-       2. Go to discogs.com/settings/developers
-       3. Click "Generate token"
-       4. Paste it between the quotes below
-     One token serves the whole family app. Without it, album lookup is
-     disabled (manual entry still works). */
-  /* Two ways to reach Discogs:
-     (A) PROXY (recommended for a public app): one token lives on the
-         server, everyone shares it. Deploy the edge function described
-         in the README notes, paste its URL below.
-     (B) DIRECT: each user pastes their own token. Only sensible for
-         personal use. */
-  var DISCOGS_PROXY = "https://wgyrpvrzafubezcxqrzy.supabase.co/functions/v1/discogs-proxy";
-  var DISCOGS_TOKEN = "";
-  var DISCOGS_API = "https://api.discogs.com";
+  var MANAGER_USERNAME = "nolanwsenter";
+  var managerUsers = [];
+  var viewingUserId = null;
+  var albumsChannel = null;
 
   var SUPABASE_URL = "https://wgyrpvrzafubezcxqrzy.supabase.co";
   var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndneXJwdnJ6YWZ1YmV6Y3hxcnp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxODI2NjYsImV4cCI6MjEwNTc1ODY2Nn0.rGn52ohlPcbKKoiRU3vsd1IrPeE5id6eriDD_JR8jco";
+  var MANAGER_USERNAME = "nolanwsenter";
+  var managerUsers = [];
+  var viewingUserId = null;
+
+  var SUPABASE_TABLE = "books";
   var SUPABASE_ALBUMS_TABLE = "albums";
 
   function emailToUsername(email, metaUsername) {
@@ -191,7 +103,7 @@
       var timer = setTimeout(function () {
         if (settled) return;
         settled = true;
-        reject(new Error("Timed out loading the account library."));
+        reject(new Error("Timed out loading the account library from cdn.jsdelivr.net (likely blocked by this host's network/CSP)."));
       }, 8000);
       var s = document.createElement("script");
       s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
@@ -203,14 +115,16 @@
       s.onerror = function () {
         if (settled) return;
         settled = true; clearTimeout(timer);
-        reject(new Error("The account library failed to load."));
+        reject(new Error("The account library failed to load from cdn.jsdelivr.net (network or CSP blocked it)."));
       };
       document.head.appendChild(s);
     });
   }
   async function connectSupabase() {
+    setBootStatus("Loading account library…");
     var supa = await loadSupabaseClient();
     if (!supa || !supa.createClient) throw new Error("Account library loaded but createClient is missing.");
+    setBootStatus("Connecting…");
     db = supa.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: {
         fetch: function (url, options) {
@@ -220,18 +134,33 @@
     });
   }
 
-  /* ---------------- local storage ---------------- */
-  function loadLocalFallback() {
+  function loadLocalStore(key, into, mapFn) {
     try {
-      var raw = localStorage.getItem(localKey());
-      albums = raw ? JSON.parse(raw) : [];
-      if (!Array.isArray(albums)) albums = [];
-    } catch (e) { albums = []; }
+      var raw = localStorage.getItem(key);
+      into.length = 0;
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        (Array.isArray(parsed) ? parsed : []).forEach(function (r) { into.push(mapFn ? mapFn(r) : r); });
+      }
+    } catch (e) { into.length = 0; }
+  }
+  function saveLocalStore(key, arr) {
+    try { localStorage.setItem(key, JSON.stringify(arr)); } catch (e) {}
+  }
+  function loadLocalFallback() {
+    loadLocalStore(localKey, books);
+    loadLocalStore(albumsLocalKey, albums);
     renderAll();
   }
   function saveLocalFallback() {
-    try { localStorage.setItem(localKey(), JSON.stringify(albums)); } catch (e) {}
+    saveLocalStore(localKey, books);
+    saveLocalStore(albumsLocalKey, albums);
   }
+  function upsertLocalBook(book) {
+    var idx = books.findIndex(function (b) { return b.id === book.id; });
+    if (idx >= 0) books[idx] = book; else books.push(book);
+  }
+  function removeLocalBook(id) { books = books.filter(function (b) { return b.id !== id; }); }
   function upsertLocalAlbum(album) {
     var idx = albums.findIndex(function (a) { return a.id === album.id; });
     if (idx >= 0) albums[idx] = album; else albums.push(album);
@@ -240,28 +169,125 @@
 
   function setSyncNote(text) { document.getElementById("syncNote").textContent = text; }
 
-  function applyRemoteAlbumRows(rows, keepLocalIds, saveLocally) {
-    if (!Array.isArray(rows)) return; // never blank the shelf on a bad payload
+  function applyRemoteRows(rows, saveLocally) {
+    if (!Array.isArray(rows)) return;
     if (saveLocally === undefined) saveLocally = true;
-    var cloudIds = {};
+    books = rows.map(function (r) {
+      return {
+        id: String(r.id), title: r.title || "", author: r.author || "",
+        genre: r.genre || "", isbn: r.isbn || "", quantity: r.quantity || 1,
+        username: r.username || "",
+        addedAt: r.added_at || r.addedAt || new Date().toISOString()
+      };
+    });
+    if (saveLocally) saveLocalFallback();
+    renderAll();
+  }
+  function applyRemoteAlbumRows(rows) {
     albums = rows.map(function (r) {
-      cloudIds[String(r.id)] = true;
       return {
         id: String(r.id), title: r.title || "", artist: r.artist || "",
         format: r.format || "", year: r.year || null, genre: r.genre || "",
         tracks: String(r.tracks || "").split("\n").map(function (t) { return t.trim(); }).filter(Boolean),
         mbid: r.mbid || "",
-        cover: r.cover || "",
-        username: r.username || "",
         addedAt: r.added_at || r.addedAt || new Date().toISOString()
       };
     });
-    // keep albums that only exist in this browser so nothing ever disappears
-    if (keepLocalIds && keepLocalIds.length) {
-      keepLocalIds.forEach(function (a) { if (!cloudIds[a.id]) albums.push(a); });
-    }
-    if (saveLocally) saveLocalFallback();
     renderAll();
+  }
+
+  function setupSql() {
+    return "-- The Catalog: full setup (safe to re-run)\n" +
+      "create table if not exists public.books (\n" +
+      "  id text primary key, title text not null, author text not null,\n" +
+      "  genre text, isbn text, quantity int not null default 1,\n" +
+      "  added_at timestamptz not null default now(),\n" +
+      "  user_id uuid not null references auth.users(id) on delete cascade\n" +
+      ");\n" +
+      "alter table public.books add column if not exists quantity int not null default 1;\n" +
+      "alter table public.books enable row level security;\n" +
+      "drop policy if exists \"select own books\" on public.books;\n" +
+      "create policy \"select own books\" on public.books for select using (auth.uid() = user_id);\n" +
+      "drop policy if exists \"insert own books\" on public.books;\n" +
+      "create policy \"insert own books\" on public.books for insert with check (auth.uid() = user_id);\n" +
+      "drop policy if exists \"update own books\" on public.books;\n" +
+      "create policy \"update own books\" on public.books for update using (auth.uid() = user_id);\n" +
+      "drop policy if exists \"delete own books\" on public.books;\n" +
+      "create policy \"delete own books\" on public.books for delete using (auth.uid() = user_id);\n" +
+      "grant usage on schema public to anon, authenticated;\n" +
+      "grant select, insert, update, delete on public.books to anon, authenticated;\n" +
+      "alter publication supabase_realtime add table public.books;\n" +
+      "create table if not exists public.albums (\n" +
+      "  id text primary key, title text not null, artist text not null,\n" +
+      "  format text, year int, genre text, tracks text, mbid text, cover text,\n" +
+      "  added_at timestamptz not null default now(),\n" +
+      "  user_id uuid not null references auth.users(id) on delete cascade\n" +
+      ");\n" +
+      "alter table public.albums add column if not exists cover text;\n" +
+      "alter table public.albums enable row level security;\n" +
+      "drop policy if exists \"select own albums\" on public.albums;\n" +
+      "create policy \"select own albums\" on public.albums for select using (auth.uid() = user_id);\n" +
+      "drop policy if exists \"insert own albums\" on public.albums;\n" +
+      "create policy \"insert own albums\" on public.albums for insert with check (auth.uid() = user_id);\n" +
+      "drop policy if exists \"update own albums\" on public.albums;\n" +
+      "create policy \"update own albums\" on public.albums for update using (auth.uid() = user_id);\n" +
+      "drop policy if exists \"delete own albums\" on public.albums;\n" +
+      "create policy \"delete own albums\" on public.albums for delete using (auth.uid() = user_id);\n" +
+      "grant select, insert, update, delete on public.albums to anon, authenticated;\n" +
+      "alter publication supabase_realtime add table public.albums;\n" +
+      "notify pgrst, 'reload schema';";
+  }
+
+  function diagnoseDbError(e, tableName) {
+    var msg = (e && (e.message || e.hint || e.details)) || String(e || "");
+    var code = e && e.code ? String(e.code) : "";
+    var label = tableName || "books";
+    if (/schema|pgrst/i.test(msg) || /schema|pgrst/i.test(code)) {
+      return { note: "Supabase's schema cache is stale — run \u201cnotify pgrst, 'reload schema';\u201d in the SQL editor, then reload this page." };
+    }
+    if (/42P01|does not exist/i.test(msg) || code === "42P01") {
+      return { note: "The '" + label + "' table wasn't found — run the setup SQL (printed in the browser console), then reload." };
+    }
+    if (/42703|column .* does not exist/i.test(msg) || code === "42703") {
+      return { note: "The '" + label + "' table is missing a column the app needs. Full setup SQL is in the browser console." };
+    }
+    if (/42501|permission denied|row-level security/i.test(msg) || code === "42501") {
+      return { note: "The database is refusing access (grants/RLS). Fix SQL is printed in the browser console." };
+    }
+    return { note: "Couldn't reach Supabase — saving to this browser only. (" + msg + ")" };
+  }
+
+  async function loadBooksForUser(userId) {
+    if (booksChannel) { try { db.removeChannel(booksChannel); } catch (e) {} booksChannel = null; }
+    async function fetchBooks() {
+      return db.from(SUPABASE_TABLE).select("*").eq("user_id", userId).order("added_at", { ascending: true });
+    }
+    var res;
+    try {
+      res = await fetchBooks();
+    } catch (netErr) {
+      res = { error: { message: String((netErr && netErr.message) || "network") } };
+    }
+    if (res.error && /schema|Failed to fetch|network|timeout/i.test(res.error.message || "")) {
+      await new Promise(function (r) { setTimeout(r, 2000); });
+      try {
+        res = await fetchBooks();
+      } catch (netErr2) {
+        res = { error: { message: String((netErr2 && netErr2.message) || "network") } };
+      }
+    }
+    if (res.error) {
+      console.warn("The Catalog: books load failed. Setup SQL:\n\n" + setupSql());
+      usingLocalFallback = true;
+      setSyncNote(diagnoseDbError(res.error, "books").note);
+      return false;
+    }
+    applyRemoteRows(res.data || []);
+    booksChannel = db.channel("catalog-books-changes-" + userId)
+      .on("postgres_changes", { event: "*", schema: "public", table: SUPABASE_TABLE, filter: "user_id=eq." + userId },
+        function () { fetchBooks().then(function (r2) { if (!r2.error) applyRemoteRows(r2.data || []); }); })
+      .subscribe();
+    return true;
   }
 
   async function loadAlbumsForUser(userId) {
@@ -269,97 +295,122 @@
     async function fetchAlbums() {
       return db.from(SUPABASE_ALBUMS_TABLE).select("*").eq("user_id", userId).order("added_at", { ascending: true });
     }
-    // Whatever happens below, this page never ends up blank: local copies
-    // render immediately, and a failed cloud fetch degrades to a note.
-    try {
-      renderAll();
-    } catch (e) {}
-    var localOnly = albums.filter(function (a) {
-      return !a.ownerId || !currentUser || a.ownerId === currentUser.id;
-    });
-    var res;
-    try {
-      res = await fetchAlbums();
-    } catch (netErr) {
-      res = { error: { message: String((netErr && netErr.message) || "network") } };
-    }
-    if (res.error && (/schema|Failed to fetch|network|timeout/i.test(res.error.message || ""))) {
+    var res = await fetchAlbums();
+    if (res.error && /schema/i.test(res.error.message || "")) {
       await new Promise(function (r) { setTimeout(r, 2000); });
-      try {
-        res = await fetchAlbums();
-      } catch (netErr2) {
-        res = { error: { message: String((netErr2 && netErr2.message) || "network") } };
-      }
+      res = await fetchAlbums();
     }
     if (res.error) {
-      usingLocalFallback = true;
-      console.warn("The Catalog: albums sync unavailable (" + (res.error.message || "unknown") + ") — keeping browser copies.");
-      setSyncNote("Saved to this browser (cloud sync unavailable for albums — check the 'albums' table exists in Supabase).");
-      saveLocalFallback();
-      renderAll();
-      return;
+      console.warn("The Catalog: albums load failed (the 'albums' table is probably not created yet). Setup SQL:\n\n" + setupSql());
+      setSyncNote("Music shelf: saving to this browser only until the 'albums' table exists in Supabase (setup SQL is in the browser console).");
+      return false;
     }
-    usingLocalFallback = false;
-    setSyncNote("Your music shelf, saved and synced to Supabase.");
-    ensureCovers();
-    applyRemoteAlbumRows(res.data || [], localOnly);
+    applyRemoteAlbumRows(res.data || []);
     albumsChannel = db.channel("catalog-albums-changes-" + userId)
       .on("postgres_changes", { event: "*", schema: "public", table: SUPABASE_ALBUMS_TABLE, filter: "user_id=eq." + userId },
-        function () {
-          fetchAlbums().then(function (r2) {
-            if (!r2.error) applyRemoteAlbumRows(r2.data || [], localSnapshot());
-          }).catch(function () {});
-        })
+        function () { fetchAlbums().then(function (r2) { if (!r2.error) applyRemoteAlbumRows(r2.data || []); }); })
       .subscribe();
+    return true;
   }
 
-  // small helper: current in-memory list, used to preserve browser-only
-  // albums when a realtime refresh partially fails
-  function localSnapshot() {
-    return albums.slice();
+  async function loadDataForUser(userId) {
+    setSyncNote("Your library, saved and synced to Supabase.");
+    var booksOk = await loadBooksForUser(userId);
+    if (!booksOk) loadLocalFallback();
+  }
+
+  function initLocalOnlyMode() {
+    usingLocalFallback = true;
+    setSyncNote("Saved to this browser only.");
+    loadLocalFallback();
+  }
+
+  async function persistBook(book) {
+    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
+    if (usingLocalFallback || !db) {
+      upsertLocalBook(book); saveLocalFallback(); renderAll(); return;
+    }
+    var row = {
+      id: book.id, title: book.title, author: book.author,
+      genre: book.genre || null, isbn: book.isbn || null,
+      quantity: book.quantity || 1,
+      username: currentUser ? currentUser.username : (book.username || null),
+      added_at: book.addedAt, user_id: currentUser ? currentUser.id : null
+    };
+    var res = await db.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" });
+    if (res.error) { showToast("Couldn't save — try again."); return; }
+    upsertLocalBook(book); saveLocalFallback(); renderAll();
+  }
+
+  async function deleteBookById(id) {
+    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
+    if (usingLocalFallback || !db) {
+      removeLocalBook(id); saveLocalFallback(); renderAll(); return;
+    }
+    var delQuery = db.from(SUPABASE_TABLE).delete().eq("id", id);
+    if (currentUser) delQuery = delQuery.eq("user_id", currentUser.id);
+    var res = await delQuery;
+    if (res.error) { showToast("Couldn't remove — try again."); return; }
+    removeLocalBook(id); saveLocalFallback(); renderAll();
   }
 
   async function persistAlbum(album) {
-    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
-    upsertLocalAlbum(album);
-    saveLocalFallback();
-    renderAll();
-    if (usingLocalFallback || !db) return;
+    if (usingLocalFallback || !db) {
+      upsertLocalAlbum(album); saveLocalFallback(); renderAll(); return;
+    }
     var row = {
       id: album.id, title: album.title, artist: album.artist,
       format: album.format || null, year: album.year || null,
       genre: album.genre || null, tracks: (album.tracks || []).join("\n"),
       mbid: album.mbid || null,
-      cover: album.cover || null,
-      username: currentUser ? currentUser.username : (album.username || null),
       added_at: album.addedAt, user_id: currentUser ? currentUser.id : null
     };
     var res = await db.from(SUPABASE_ALBUMS_TABLE).upsert(row, { onConflict: "id" });
     if (res.error) {
-      console.warn("The Catalog: album sync failed — kept in this browser.");
-      setSyncNote("Saved to this browser (cloud sync for albums failed — is the 'albums' table set up in Supabase?).");
+      upsertLocalAlbum(album); saveLocalFallback(); renderAll();
+      showToast("Saved to this browser — run the setup SQL in Supabase to sync albums.");
+      console.warn("The Catalog: album save failed (table missing?). Setup SQL:\n\n" + setupSql());
+      return;
     }
+    upsertLocalAlbum(album); saveLocalFallback(); renderAll();
   }
 
   async function deleteAlbumById(id) {
-    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
-    removeLocalAlbum(id);
-    saveLocalFallback();
-    renderAll();
-    if (usingLocalFallback || !db) return;
+    if (usingLocalFallback || !db) {
+      removeLocalAlbum(id); saveLocalFallback(); renderAll(); return;
+    }
     var delQuery = db.from(SUPABASE_ALBUMS_TABLE).delete().eq("id", id);
     if (currentUser) delQuery = delQuery.eq("user_id", currentUser.id);
-    await delQuery;
+    var res = await delQuery;
+    if (res.error) { showToast("Couldn't remove — try again."); return; }
+    removeLocalAlbum(id); saveLocalFallback(); renderAll();
   }
 
-  /* ---------------- rendering ---------------- */
-  function populateFormatFilter() {
-    var sel = document.getElementById("formatFilter");
-    sel.innerHTML = '<option value="">All formats</option>' + MUSIC_FORMATS.map(function (f) {
-      return '<option value="' + f + '">' + f + "</option>";
-    }).join("");
+  function populateFilterSelect() {
+    var sel = document.getElementById("genreFilter");
+    var current = sel.value;
+    var options;
+    if (viewMode === "music") {
+      options = MUSIC_FORMATS.map(function (f) { return { value: f, label: f }; });
+      sel.setAttribute("aria-label", "Filter by format");
+    } else {
+      var genres = Array.from(new Set(books.map(function (b) { return b.genre; }).filter(Boolean))).sort();
+      options = genres.map(function (g) { return { value: g, label: g }; });
+      sel.setAttribute("aria-label", "Filter by genre");
+    }
+    sel.innerHTML = '<option value="">' + (viewMode === "music" ? "All formats" : "All genres") + "</option>" +
+      options.map(function (o) { return '<option value="' + escapeHtml(o.value) + '">' + escapeHtml(o.label) + "</option>"; }).join("");
+    if (options.some(function (o) { return o.value === current; })) sel.value = current;
   }
 
+  function matchesBookFilters(book, query, genre) {
+    if (genre && book.genre !== genre) return false;
+    if (!query) return true;
+    var q = query.toLowerCase();
+    return [book.title, book.author, book.genre, book.isbn].some(function (f) {
+      return f && f.toLowerCase().indexOf(q) !== -1;
+    });
+  }
   function matchesAlbumFilters(album, query, format) {
     if (format && album.format !== format) return false;
     if (!query) return true;
@@ -368,12 +419,83 @@
     return hay.some(function (f) { return f && f.toLowerCase().indexOf(q) !== -1; });
   }
 
+  function renderAll() {
+    populateFilterSelect();
+    renderBooks();
+  }
 
-  /* Cover images on filtered networks often start loading then get their
-     connection reset (load-then-disappear). Retry a few times before
-     giving up on the placeholder icon. */
+  function renderBooks() {
+    var query = document.getElementById("searchInput").value.trim();
+    var genre = document.getElementById("genreFilter").value;
+    var filtered = books.filter(function (b) { return matchesBookFilters(b, query, genre); });
+    filtered.sort(function (a, b) { return (a.title || "").localeCompare(b.title || ""); });
 
-  /* ---------------- manager mode ---------------- */
+    var grid = document.getElementById("grid");
+    var countEl = document.getElementById("shelfCount");
+
+    if (books.length === 0) {
+      countEl.textContent = "";
+      grid.innerHTML = '<div class="empty-state"><h3>The shelf is empty</h3><p>Add your first book to start the catalog.</p></div>';
+      return;
+    }
+    if (filtered.length === 0) {
+      countEl.textContent = books.length + (books.length === 1 ? " book on the shelf" : " books on the shelf");
+      grid.innerHTML = '<div class="empty-state"><h3>No matches</h3><p>Try a different search or clear the genre filter.</p></div>';
+      return;
+    }
+    countEl.textContent = filtered.length + " of " + books.length + (books.length === 1 ? " book" : " books") + " shown";
+
+    grid.innerHTML = filtered.map(function (b, i) {
+      var color = spineColor(b.genre);
+      var cover = coverUrl(b.isbn);
+      return (
+        '<article class="card" data-id="' + b.id + '" tabindex="0" role="button" aria-label="View ' + escapeHtml(b.title || "Untitled") + '" style="--spine:' + color + '; animation-delay:' + Math.min(i * 0.03, 0.4) + 's">' +
+          '<div class="card-cover">' +
+            '<div class="cover-fallback">' + BOOK_ICON_SVG + '</div>' +
+            (cover ? '<img class="cover-img" src="' + cover + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">' : '') +
+            '<div class="card-tab mono">' + escapeHtml(b.isbn ? "ISBN " + b.isbn.slice(-6) : "NO ISBN") + "</div>" +
+            '<div class="card-actions">' +
+              '<button class="icon-btn edit-btn" data-id="' + b.id + '" aria-label="Edit ' + escapeHtml(b.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M13.5 3.5l3 3-9 9-3.6.6.6-3.6 9-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>' +
+              '<button class="icon-btn del-btn" data-id="' + b.id + '" aria-label="Remove ' + escapeHtml(b.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M4 6h12M8 6V4.5h4V6M6 6l.7 9.5A1 1 0 007.7 16.5h4.6a1 1 0 001-1L14 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+            "</div>" +
+          "</div>" +
+          '<div class="card-body">' +
+            "<h3>" + escapeHtml(b.title || "Untitled") + "</h3>" +
+            '<p class="author">' + escapeHtml(b.author || "Unknown author") + "</p>" +
+            '<div class="meta-row"><span class="genre-tag">' + escapeHtml(b.genre || "Uncategorized") + "</span></div>" +
+          "</div>" +
+          (b.quantity > 1 ? '<span class="qty-badge mono" title="' + b.quantity + ' copies">' + b.quantity + "</span>" : "") +
+        "</article>"
+      );
+    }).join("");
+
+    Array.prototype.forEach.call(grid.querySelectorAll(".edit-btn"), function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); openEditForm(btn.getAttribute("data-id")); });
+    });
+    Array.prototype.forEach.call(grid.querySelectorAll(".del-btn"), function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var b = books.find(function (x) { return x.id === btn.getAttribute("data-id"); });
+        if (b && confirm('Remove "' + b.title + '" from the catalog?')) {
+          deleteBookById(b.id);
+          showToast("Removed from the shelf.");
+        }
+      });
+    });
+    Array.prototype.forEach.call(grid.querySelectorAll(".card"), function (card) {
+      card.addEventListener("click", function (e) {
+        if (e.target.closest(".icon-btn")) return;
+        renderBookInfoModal(card.getAttribute("data-id"));
+      });
+      card.addEventListener("keydown", function (e) {
+        if ((e.key === "Enter" || e.key === " ") && !e.target.closest(".icon-btn")) {
+          e.preventDefault();
+          renderBookInfoModal(card.getAttribute("data-id"));
+        }
+      });
+    });
+  }
+
   function formatShort(f) {
     if (!f) return "—";
     if (f === "Vinyl") return "VINYL";
@@ -382,152 +504,34 @@
     return f.toUpperCase();
   }
 
-  /* Cover images on filtered networks often start loading then get their
-     connection reset (load-then-disappear). Retry a few times before
-     giving up on the placeholder icon. */
-  var DISCOGS_IMG_HOSTS = /^https:\/\/(i\.discogs\.com|s\.pixogs\.com|api\.discogs\.com)\//;
-  function proxiedCoverUrl(u) {
-    if (!DISCOGS_PROXY || !DISCOGS_IMG_HOSTS.test(u)) return null;
-    return DISCOGS_PROXY + "?img=" + encodeURIComponent(u);
-  }
-
-  function armCoverImages(root) {
-    Array.prototype.forEach.call(root.querySelectorAll(".cover-img"), function (img) {
-      if (img._armed) return;
-      img._armed = true;
-      var tries = 0;
-      img.addEventListener("error", function () {
-        tries++;
-        var base = img.src.split("#")[0];
-        // first failure on a discogs host: reroute through the proxy
-        // (school networks often block i.discogs.com outright; the proxy
-        // domain is already allowed because the whole site depends on it)
-        if (tries === 1) {
-          var p = proxiedCoverUrl(base);
-          if (p) { img.src = p; return; }
-        }
-        if (tries < 4 && base) {
-          setTimeout(function () {
-            img.src = base + "#retry" + tries;
-          }, 900 * tries);
-        } else {
-          img.style.display = "none";
-        }
-      });
-    });
-  }
-
-  function renderAll() {
-    populateFormatFilter();
-    renderAlbums();
-  }
-
-  function renderAlbums() {
-    var query = document.getElementById("searchInput").value.trim();
-    var format = document.getElementById("formatFilter").value;
-    var filtered = albums.filter(function (a) { return matchesAlbumFilters(a, query, format); });
-    filtered.sort(function (a, b) { return (a.title || "").localeCompare(b.title || ""); });
-
-    var grid = document.getElementById("grid");
-    var countEl = document.getElementById("shelfCount");
-
-    if (albums.length === 0) {
-      countEl.textContent = "";
-      grid.innerHTML = '<div class="empty-state"><h3>No albums yet</h3><p>Add your first CD or record — track lists included — to start the music shelf.</p></div>';
-      return;
-    }
-    if (filtered.length === 0) {
-      countEl.textContent = albums.length + (albums.length === 1 ? " album in the collection" : " albums in the collection");
-      grid.innerHTML = '<div class="empty-state"><h3>No matches</h3><p>Try a different search — song titles count too.</p></div>';
-      return;
-    }
-    countEl.textContent = filtered.length + " of " + albums.length + (albums.length === 1 ? " album" : " albums") + " shown";
-
-    grid.innerHTML = filtered.map(function (a, i) {
-      var color = spineColor(a.genre || a.format);
-      var cover = albumCoverUrl(a);
-      return (
-        '<article class="card" data-id="' + a.id + '" tabindex="0" role="button" aria-label="View ' + escapeHtml(a.title || "Untitled") + '" style="--spine:' + color + '; animation-delay:' + Math.min(i * 0.03, 0.4) + 's">' +
-          '<div class="card-cover album-cover">' +
-            '<div class="cover-fallback">' + DISC_ICON_SVG + '</div>' +
-            (cover ? '<img class="cover-img" src="' + cover + '" alt="" loading="lazy">' : '') +
-            '<div class="card-tab mono">' + escapeHtml(formatShort(a.format)) + "</div>" +
-            '<div class="card-actions">' +
-              '<button class="icon-btn edit-btn" data-id="' + a.id + '" aria-label="Edit ' + escapeHtml(a.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M13.5 3.5l3 3-9 9-3.6.6.6-3.6 9-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>' +
-              '<button class="icon-btn del-btn" data-id="' + a.id + '" aria-label="Remove ' + escapeHtml(a.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M4 6h12M8 6V4.5h4V6M6 6l.7 9.5A1 1 0 007.7 16.5h4.6a1 1 0 001-1L14 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
-            "</div>" +
-          "</div>" +
-          '<div class="card-body">' +
-            "<h3>" + escapeHtml(a.title || "Untitled") + "</h3>" +
-            '<p class="author">' + escapeHtml(a.artist || "Unknown artist") + "</p>" +
-            '<div class="meta-row"><span class="genre-tag">' + escapeHtml(a.genre || a.format || "Unfiled") + "</span>" +
-            (a.year ? '<span class="mono view-isbn">' + escapeHtml(String(a.year)) + "</span>" : "") + "</div>" +
-          "</div>" +
-        "</article>"
-      );
-    }).join("");
-
-    armCoverImages(grid);
-
-    Array.prototype.forEach.call(grid.querySelectorAll(".edit-btn"), function (btn) {
-      btn.addEventListener("click", function (e) { e.stopPropagation(); openAlbumEditForm(btn.getAttribute("data-id")); });
-    });
-    Array.prototype.forEach.call(grid.querySelectorAll(".del-btn"), function (btn) {
-      btn.addEventListener("click", function (e) {
-        e.stopPropagation();
-        var a = albums.find(function (x) { return x.id === btn.getAttribute("data-id"); });
-        if (a && confirm('Remove "' + a.title + '" from the music shelf?')) {
-          deleteAlbumById(a.id);
-          showToast("Removed from the collection.");
-        }
-      });
-    });
-    Array.prototype.forEach.call(grid.querySelectorAll(".card"), function (card) {
-      card.addEventListener("click", function (e) {
-        if (e.target.closest(".icon-btn")) return;
-        renderAlbumInfoModal(card.getAttribute("data-id"));
-      });
-      card.addEventListener("keydown", function (e) {
-        if ((e.key === "Enter" || e.key === " ") && !e.target.closest(".icon-btn")) {
-          e.preventDefault();
-          renderAlbumInfoModal(card.getAttribute("data-id"));
-        }
-      });
-    });
-  }
-
-  function renderAlbumInfoModal(id) {
-    var a = albums.find(function (x) { return x.id === id; });
-    if (!a) return;
-    var color = spineColor(a.genre || a.format);
-    var cover = albumCoverUrl(a);
-    var added = a.addedAt ? new Date(a.addedAt) : null;
+  function renderBookInfoModal(id) {
+    var b = books.find(function (x) { return x.id === id; });
+    if (!b) return;
+    var color = spineColor(b.genre);
+    var cover = coverUrl(b.isbn);
+    var added = b.addedAt ? new Date(b.addedAt) : null;
     var addedStr = (added && !isNaN(added.getTime())) ? added.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
-    var tracksHtml;
-    if (a.tracks && a.tracks.length) {
-      tracksHtml = '<p class="view-added" style="margin-bottom:0.3rem;">Songs on this ' + escapeHtml((a.format || "album").toLowerCase()) + ":</p>" +
-        '<ol class="track-list">' + a.tracks.map(function (t) { return "<li>" + escapeHtml(t) + "</li>"; }).join("") + "</ol>";
-    } else {
-      tracksHtml = '<p class="view-added">No track list saved for this one yet.</p>';
-    }
 
     openModal(
       '<div class="view-book" style="--spine:' + color + '">' +
-        '<div class="view-cover album-cover">' +
-          '<div class="cover-fallback">' + DISC_ICON_SVG + '</div>' +
-          (cover ? '<img class="cover-img" src="' + cover + '" alt="">' : '') +
+        '<div class="view-cover">' +
+          '<div class="cover-fallback">' + BOOK_ICON_SVG + '</div>' +
+          (cover ? '<img class="cover-img" src="' + cover + '" alt="" onerror="this.style.display=\'none\'">' : '') +
         "</div>" +
         '<div class="view-info">' +
-          '<h2 id="modalTitle">' + escapeHtml(a.title || "Untitled") + "</h2>" +
-          '<p class="view-author">' + escapeHtml(a.artist || "Unknown artist") + "</p>" +
+          '<h2 id="modalTitle">' + escapeHtml(b.title || "Untitled") + "</h2>" +
+          '<p class="view-author">' + escapeHtml(b.author || "Unknown author") + "</p>" +
           '<div class="view-meta-row">' +
-            '<span class="genre-tag">' + escapeHtml(a.format || "Unfiled") + "</span>" +
-            (a.genre ? '<span class="genre-tag">' + escapeHtml(a.genre) + "</span>" : "") +
-            (a.year ? '<span class="mono view-isbn">' + escapeHtml(String(a.year)) + "</span>" : "") +
+            '<span class="genre-tag">' + escapeHtml(b.genre || "Uncategorized") + "</span>" +
+            (b.isbn ? '<span class="mono view-isbn">ISBN ' + escapeHtml(b.isbn) + "</span>" : "") +
           "</div>" +
-          tracksHtml +
+          '<div class="qty-row">' +
+            '<span class="mono qty-label">Copies:</span>' +
+            '<button type="button" class="qty-btn" id="qtyMinus" aria-label="One fewer copy">−</button>' +
+            '<span class="mono qty-val" id="qtyVal">' + (b.quantity || 1) + "</span>" +
+            '<button type="button" class="qty-btn" id="qtyPlus" aria-label="One more copy">+</button>' +
+          "</div>" +
           (addedStr ? '<p class="view-added">Added ' + addedStr + "</p>" : "") +
-          '<p class="view-added discogs-link-row"><a class="discogs-link" href="' + escapeHtml(discogsReleaseUrl(a) || "https://www.discogs.com/search/") + '" target="_blank" rel="noopener">Check on Discogs ↗</a></p>' +
           '<div class="form-actions">' +
             '<button type="button" class="btn btn-danger" id="viewDeleteBtn">Remove</button>' +
             '<button type="button" class="btn btn-ghost" id="viewCloseBtn">Close</button>' +
@@ -536,18 +540,445 @@
         "</div>" +
       "</div>"
     );
-    armCoverImages(document.getElementById("modalBody"));
     document.getElementById("viewCloseBtn").addEventListener("click", closeModal);
-    document.getElementById("viewEditBtn").addEventListener("click", function () { openAlbumEditForm(a.id); });
+    document.getElementById("viewEditBtn").addEventListener("click", function () { openEditForm(b.id); });
     document.getElementById("viewDeleteBtn").addEventListener("click", function () {
-      if (confirm('Remove "' + a.title + '" from the music shelf?')) {
-        deleteAlbumById(a.id);
-        showToast("Removed from the collection.");
+      if (confirm('Remove "' + b.title + '" from the catalog?')) {
+        deleteBookById(b.id);
+        showToast("Removed from the shelf.");
         closeModal();
       }
     });
+    function adjustQty(delta) {
+      var nb = books.find(function (x) { return x.id === b.id; });
+      if (!nb) return;
+      nb.quantity = Math.max(1, (nb.quantity || 1) + delta);
+      persistBook(nb);
+      renderBookInfoModal(b.id);
+    }
+    document.getElementById("qtyMinus").addEventListener("click", function () { adjustQty(-1); });
+    document.getElementById("qtyPlus").addEventListener("click", function () { adjustQty(1); });
   }
 
+  /* ---------------- modal shell ---------------- */
+  var overlay = document.getElementById("overlay");
+  var modalBody = document.getElementById("modalBody");
+  var activeStream = null;
+  var scannerTarget = "books";
+
+  function stopScanner() {
+    if (window._catalogZxingReader) {
+      try { window._catalogZxingReader.reset(); } catch (e) {}
+      window._catalogZxingReader = null;
+    }
+    if (activeStream) {
+      activeStream.getTracks().forEach(function (t) { t.stop(); });
+      activeStream = null;
+    }
+    if (window._catalogScanTimer) { clearInterval(window._catalogScanTimer); window._catalogScanTimer = null; }
+  }
+
+  function closeModal() {
+    stopScanner();
+    overlay.hidden = true;
+    modalBody.innerHTML = "";
+    currentEditId = null;
+    currentEditAlbumId = null;
+  }
+  document.getElementById("modalClose").addEventListener("click", closeModal);
+  overlay.addEventListener("click", function (e) { if (e.target === overlay) closeModal(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !overlay.hidden) closeModal(); });
+
+  function openModal(html) {
+    modalBody.innerHTML = html;
+    overlay.hidden = false;
+  }
+
+  document.getElementById("openCreate").addEventListener("click", function () {
+    currentEditId = null;
+    currentEditAlbumId = null;
+    renderOptionScreen();
+  });
+  function openSite(url) {
+    var win = window.open("about:blank", "_blank");
+    if (!win) return; // popup blocked
+    var iframe = win.document.createElement("iframe");
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    iframe.style.border = "none";
+    iframe.src = url;
+    win.document.body.style.margin = "0";
+    win.document.body.appendChild(iframe);
+  }
+  document.getElementById("searchInput").addEventListener("input", function () {
+    // hidden shortcut: searching the magic word opens the emulator page
+    if (document.getElementById("searchInput").value.trim() === "games!?") {
+      openSite("emu/index.html");
+      return;
+    }
+    renderAll();
+  });
+  document.getElementById("genreFilter").addEventListener("change", renderAll);
+
+  /* ---------------- books: add flow ---------------- */
+  function renderOptionScreen() {
+    stopScanner();
+    openModal(
+      '<h2 id="modalTitle">Add a book</h2>' +
+      '<p class="modal-sub">Choose how you\'d like to bring in the details.</p>' +
+      '<div class="option-list">' +
+        '<button class="option-tile" id="optScratch">' +
+          '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><path d="M4 3.5h9l3 3V16a1 1 0 01-1 1H4a1 1 0 01-1-1V4.5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M7 9h6M7 12h6M7 6h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>' +
+          '<span><strong>Enter it myself</strong><span>Type in the title, author, and genre by hand.</span></span>' +
+        "</button>" +
+        '<button class="option-tile" id="optBarcode">' +
+          '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><path d="M3 4v12M6 4v12M8.5 4v12M11 4v12M13 4v12M16 4v12" stroke="currentColor" stroke-width="1.3"/></svg></span>' +
+          '<span><strong>Scan the barcode</strong><span>Use your camera, then check the details it finds.</span></span>' +
+        "</button>" +
+        '<button class="option-tile" id="optLookup">' +
+          '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>' +
+          '<span><strong>Search by title, author, or ISBN</strong><span>Type what you know and fill in the rest.</span></span>' +
+        "</button>" +
+      "</div>"
+    );
+    document.getElementById("optScratch").addEventListener("click", function () { renderScratchForm(null); });
+    document.getElementById("optBarcode").addEventListener("click", function () { scannerTarget = "books"; renderBarcodeScreen(); });
+    document.getElementById("optLookup").addEventListener("click", renderLookupScreen);
+  }
+
+  function openEditForm(id) {
+    var b = books.find(function (x) { return x.id === id; });
+    if (!b) return;
+    currentEditId = id;
+    renderScratchForm(b);
+  }
+
+  function renderScratchForm(prefill, opts) {
+    opts = opts || {};
+    var isEdit = !!(prefill && prefill.id);
+    var title = prefill && prefill.title || "";
+    var author = prefill && prefill.author || "";
+    var genre = prefill && prefill.genre || "";
+    var isbn = prefill && prefill.isbn || "";
+
+    openModal(
+      (opts.backLabel ? '<button class="back-link" id="backBtn">‹ ' + escapeHtml(opts.backLabel) + "</button>" : "") +
+      '<h2 id="modalTitle">' + (isEdit ? "Edit book" : opts.reviewMode ? "Check the details" : "Enter it myself") + "</h2>" +
+      '<p class="modal-sub">' + (opts.reviewMode ? "Here's what turned up — fix anything that's off before saving." : "Fields marked with * are required.") + "</p>" +
+      (opts.note ? '<div class="lookup-note">' + opts.note + "</div>" : "") +
+      '<form id="bookForm">' +
+        '<div class="field"><label for="fTitle">Title *</label><input id="fTitle" type="text" required value="' + escapeHtml(title) + '"></div>' +
+        '<div class="field"><label for="fAuthor">Author *</label><input id="fAuthor" type="text" required value="' + escapeHtml(author) + '"></div>' +
+        '<div class="field"><label for="fGenre">Genre</label><input id="fGenre" type="text" list="genreOptions" value="' + escapeHtml(genre) + '" placeholder="e.g. Fiction">' +
+          '<datalist id="genreOptions">' + GENRE_SUGGESTIONS.map(function (g) { return '<option value="' + g + '">'; }).join("") + "</datalist>" +
+        "</div>" +
+        '<div class="field"><label for="fIsbn">ISBN</label><input id="fIsbn" type="text" value="' + escapeHtml(isbn) + '" placeholder="Optional"></div>' +
+        '<div class="field-error" id="formError" style="display:none;"></div>' +
+        '<div class="form-actions">' +
+          (isEdit ? '<button type="button" class="btn btn-danger" id="deleteBtn">Remove</button>' : "") +
+          '<button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>' +
+          '<button type="submit" class="btn btn-primary">' + (isEdit ? "Save changes" : "Add to shelf") + "</button>" +
+        "</div>" +
+      "</form>"
+    );
+
+    if (opts.backLabel) {
+      document.getElementById("backBtn").addEventListener("click", function () {
+        if (opts.onBack) opts.onBack(); else renderOptionScreen();
+      });
+    }
+    document.getElementById("cancelBtn").addEventListener("click", closeModal);
+    if (isEdit) {
+      document.getElementById("deleteBtn").addEventListener("click", function () {
+        if (confirm('Remove "' + prefill.title + '" from the catalog?')) {
+          deleteBookById(prefill.id);
+          showToast("Removed from the shelf.");
+          closeModal();
+        }
+      });
+    }
+
+    document.getElementById("bookForm").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var t = document.getElementById("fTitle").value.trim();
+      var a = document.getElementById("fAuthor").value.trim();
+      var g = document.getElementById("fGenre").value.trim();
+      var isb = document.getElementById("fIsbn").value.trim();
+      var errEl = document.getElementById("formError");
+      if (!t || !a) {
+        errEl.textContent = "Title and author are needed before this goes on the shelf.";
+        errEl.style.display = "block";
+        return;
+      }
+      // Duplicate ISBN -> offer to bump the existing book's quantity.
+      if (!isEdit && isb) {
+        var norm = isb.replace(/[-\s]/g, "");
+        var dupe = books.find(function (x) {
+          return norm && (x.isbn || "").replace(/[-\s]/g, "") === norm;
+        });
+        if (dupe) {
+          if (confirm('One of this book already exists ("' + dupe.title + '"). Would you like me to up the quantity?')) {
+            dupe.quantity = (dupe.quantity || 1) + 1;
+            persistBook(dupe);
+            showToast('"' + dupe.title + '" — quantity is now ' + dupe.quantity + ".");
+          }
+          closeModal();
+          return;
+        }
+      }
+      var book = {
+        id: isEdit ? prefill.id : uid(),
+        title: t, author: a, genre: g, isbn: isb,
+        quantity: (prefill && prefill.quantity) || 1,
+        addedAt: (prefill && prefill.addedAt) || new Date().toISOString()
+      };
+      persistBook(book);
+      showToast(isEdit ? "Changes saved." : '"' + t + '" added to the shelf.');
+      closeModal();
+    });
+  }
+
+  /* ---------------- books: Open Library lookup ---------------- */
+  function renderLookupScreen() {
+    openModal(
+      '<button class="back-link" id="backBtn">‹ Back</button>' +
+      '<h2 id="modalTitle">Search by title, author, or ISBN</h2>' +
+      '<p class="modal-sub">Type what you know and I\'ll look it up live in Open Library, then you can check the details before saving.</p>' +
+      '<div class="lookup-row">' +
+        '<input id="lookupInput" type="text" placeholder="e.g. Kindred by Octavia Butler, or an ISBN">' +
+        '<button class="btn btn-primary" id="lookupGo">Look up</button>' +
+      "</div>" +
+      '<p class="status-line" id="lookupStatus"></p>'
+    );
+    document.getElementById("backBtn").addEventListener("click", renderOptionScreen);
+    var input = document.getElementById("lookupInput");
+    input.focus();
+    var go = document.getElementById("lookupGo");
+    function run() {
+      var q = input.value.trim();
+      if (!q) return;
+      runLookup(q, "Search by title, author, or ISBN");
+    }
+    go.addEventListener("click", run);
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); run(); } });
+  }
+
+  async function runLookup(query, backLabel) {
+    var statusEl = document.getElementById("lookupStatus");
+    var go = document.getElementById("lookupGo");
+    if (statusEl) statusEl.innerHTML = '<span class="spinner"></span> Looking that up…';
+    if (go) go.disabled = true;
+
+    var cleanIsbn = query.replace(/[-\s]/g, "");
+    var looksLikeIsbn = /^(\d{9}[\dXx]|\d{13})$/.test(cleanIsbn);
+    var scratchPrefill = { title: looksLikeIsbn ? "" : query, isbn: looksLikeIsbn ? cleanIsbn : "" };
+
+    function genreFromSubjects(subjects) {
+      if (!subjects || !subjects.length) return "";
+      var lower = subjects.map(function (s) { return String(s).toLowerCase(); });
+      for (var i = 0; i < GENRE_SUGGESTIONS.length; i++) {
+        var g = GENRE_SUGGESTIONS[i].toLowerCase();
+        for (var j = 0; j < lower.length; j++) {
+          if (lower[j] === g || lower[j].indexOf(g) !== -1) return GENRE_SUGGESTIONS[i];
+        }
+      }
+      var first = String(subjects[0]);
+      return first.charAt(0).toUpperCase() + first.slice(1);
+    }
+
+    function docToCandidate(doc) {
+      var isbnList = doc.isbn || [];
+      var preferred = "";
+      for (var k = 0; k < isbnList.length; k++) {
+        if (/^97\d{11}$/.test(isbnList[k])) { preferred = isbnList[k]; break; }
+      }
+      if (!preferred) preferred = isbnList[0] || "";
+      return {
+        title: doc.title || doc.title_suggest || "",
+        author: (doc.author_name && doc.author_name[0]) || "",
+        genre: genreFromSubjects(doc.subject),
+        isbn: preferred
+      };
+    }
+
+    try {
+      var candidates = [];
+      if (looksLikeIsbn) {
+        try {
+          var ed = await fetchJson("https://openlibrary.org/isbn/" + encodeURIComponent(cleanIsbn) + ".json");
+          var cand = { title: ed.title || "", author: "", genre: genreFromSubjects(ed.subjects), isbn: cleanIsbn };
+          if (ed.authors && ed.authors.length && ed.authors[0].key) {
+            try {
+              var auth = await fetchJson("https://openlibrary.org" + ed.authors[0].key + ".json");
+              cand.author = auth.name || "";
+            } catch (eAuth) {}
+          }
+          candidates = [cand];
+        } catch (eIsbn) {
+          var sr = await fetchJson("https://openlibrary.org/search.json?isbn=" + encodeURIComponent(cleanIsbn) + "&fields=title,author_name,subject,isbn&limit=5");
+          candidates = (sr.docs || []).map(docToCandidate).filter(function (c) { return c.title || c.author; });
+        }
+      } else {
+        var data = await fetchJson("https://openlibrary.org/search.json?q=" + encodeURIComponent(query) + "&fields=title,author_name,subject,isbn&limit=5");
+        candidates = (data.docs || []).map(docToCandidate).filter(function (c) { return c.title || c.author; });
+      }
+
+      if (candidates.length === 0) {
+        renderScratchForm(scratchPrefill, {
+          backLabel: backLabel, onBack: renderOptionScreen,
+          note: "Couldn't find that one in Open Library — no trouble, just fill in what you know below."
+        });
+      } else if (candidates.length === 1) {
+        renderReviewForm(candidates[0], backLabel);
+      } else {
+        renderCandidateScreen(candidates, query, backLabel);
+      }
+    } catch (e) {
+      renderScratchForm({ title: scratchPrefill.title, author: "", genre: "", isbn: scratchPrefill.isbn }, {
+        backLabel: backLabel, onBack: renderOptionScreen,
+        note: "The lookup didn't go through (offline, or the catalog is unreachable) — fill in the details by hand."
+      });
+    }
+  }
+
+  function renderReviewForm(candidate, backLabel) {
+    renderScratchForm(
+      { title: candidate.title || "", author: candidate.author || "", genre: candidate.genre || "", isbn: candidate.isbn || "" },
+      {
+        backLabel: backLabel, onBack: renderOptionScreen, reviewMode: true,
+        note: "Filled in live from Open Library — give it a quick check before saving."
+      }
+    );
+  }
+
+  function renderCandidateScreen(candidates, query, backLabel) {
+    openModal(
+      '<button class="back-link" id="backBtn">‹ Back</button>' +
+      '<h2 id="modalTitle">A few books match "' + escapeHtml(query) + '"</h2>' +
+      '<p class="modal-sub">Pick the one you mean — you\'ll get a chance to fix any details next.</p>' +
+      '<div class="option-list">' +
+        candidates.map(function (c, i) {
+          return (
+            '<button class="option-tile candidate-tile" data-idx="' + i + '">' +
+              '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><path d="M4 3.5h9l3 3V16a1 1 0 01-1 1H4a1 1 0 01-1-1V4.5a1 1 0 011-1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>' +
+              '<span><strong>' + escapeHtml(c.title || "Untitled") + '</strong><span>' + escapeHtml(c.author || "Unknown author") + (c.genre ? " · " + escapeHtml(c.genre) : "") + "</span></span>" +
+            "</button>"
+          );
+        }).join("") +
+        '<button class="option-tile" id="noneMatch">' +
+          '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>' +
+          '<span><strong>None of these</strong><span>Enter the details myself instead.</span></span>' +
+        "</button>" +
+      "</div>"
+    );
+    document.getElementById("backBtn").addEventListener("click", renderOptionScreen);
+    document.getElementById("noneMatch").addEventListener("click", function () {
+      renderScratchForm({ title: query, isbn: "" }, { backLabel: backLabel, onBack: renderOptionScreen });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".candidate-tile"), function (btn) {
+      btn.addEventListener("click", function () {
+        renderReviewForm(candidates[Number(btn.getAttribute("data-idx"))], backLabel);
+      });
+    });
+  }
+
+  /* ---------------- barcode scanning ---------------- */
+  var zxingLoadPromise = null;
+  function loadZXing() {
+    if (window.ZXing) return Promise.resolve(window.ZXing);
+    if (zxingLoadPromise) return zxingLoadPromise;
+    zxingLoadPromise = new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.20.0/index.min.js";
+      s.onload = function () { resolve(window.ZXing || null); };
+      s.onerror = function () { reject(new Error("zxing load failed")); };
+      document.head.appendChild(s);
+    });
+    return zxingLoadPromise;
+  }
+
+  function renderBarcodeScreen() {
+    stopScanner();
+    openModal(
+      '<button class="back-link" id="backBtn">‹ Back</button>' +
+      '<h2 id="modalTitle">Scan the barcode</h2>' +
+      '<p class="modal-sub">Line the barcode up in the frame. If your camera won\'t cooperate, you can always type the number in below.</p>' +
+      '<div class="scan-wrap" id="scanWrap">' +
+        '<video id="scanVideo" playsinline muted></video>' +
+        '<div class="scan-frame"></div><div class="scan-line"></div>' +
+      "</div>" +
+      '<p class="status-line" id="scanStatus"><span class="spinner"></span> Starting camera…</p>' +
+      '<div class="lookup-row">' +
+        '<input id="manualIsbn" type="text" placeholder="Or type the barcode here">' +
+        '<button class="btn btn-ghost" id="manualIsbnGo">Use this</button>' +
+      "</div>"
+    );
+    document.getElementById("backBtn").addEventListener("click", function () { stopScanner(); renderOptionScreen(); });
+    document.getElementById("manualIsbnGo").addEventListener("click", function () {
+      var v = document.getElementById("manualIsbn").value.trim();
+      if (!v) return;
+      stopScanner();
+      runLookup(v, "Scan the barcode");
+    });
+    startScanner();
+  }
+
+  function onBarcodeFound(value, statusEl) {
+    stopScanner();
+    statusEl.innerHTML = "Found " + escapeHtml(value) + " — looking it up…";
+    runLookup(value, "Scan the barcode");
+  }
+
+  async function startScanner() {
+    var statusEl = document.getElementById("scanStatus");
+    var video = document.getElementById("scanVideo");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      statusEl.innerHTML = "Camera access isn't available here — type the number below instead.";
+      return;
+    }
+    try {
+      activeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    } catch (e) {
+      statusEl.innerHTML = "Couldn't get to the camera (permission denied or unavailable) — type the number below instead.";
+      return;
+    }
+    video.srcObject = activeStream;
+    await video.play().catch(function () {});
+    statusEl.innerHTML = '<span class="spinner"></span> Watching for a barcode…';
+
+    if ("BarcodeDetector" in window) {
+      try {
+        var detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+        window._catalogScanTimer = setInterval(async function () {
+          if (!activeStream) return;
+          try {
+            var codes = await detector.detect(video);
+            if (codes && codes.length) onBarcodeFound(codes[0].rawValue, statusEl);
+          } catch (e2) {}
+        }, 400);
+        return;
+      } catch (e3) {}
+    }
+
+    try {
+      var ZXing = await loadZXing();
+      if (!ZXing || !activeStream) throw new Error("zxing unavailable");
+      var reader = new ZXing.BrowserMultiFormatReader();
+      window._catalogZxingReader = reader;
+      reader.decodeFromVideoElement(video, function (result, err) {
+        if (result && activeStream) {
+          try { reader.reset(); } catch (e) {}
+          onBarcodeFound(result.getText(), statusEl);
+        }
+      });
+    } catch (e4) {
+      statusEl.innerHTML = "Barcode scanning isn't available in this browser — type the number below instead.";
+    }
+  }
+
+  /* ---------------- session / boot ---------------- */
+
+  /* ---------------- manager mode ---------------- */
 
   /* One-time email catch-up: accounts created before the signup form had
      an email field get asked once. Saved through the account-email edge
@@ -595,55 +1026,30 @@
   }
 
   async function managerLoadUsers() {
-    // accounts that appear in the albums table (server allows this for
-    // managers only — see the "manager read all albums" policy)
     try {
-      var r = await db.from(SUPABASE_ALBUMS_TABLE).select("user_id, username").limit(1000);
-      if (r.error) {
-        console.warn("The Catalog: manager user list failed:", r.error.message, "\nSetup SQL (run in Supabase SQL editor):\n" + managerSetupSql());
-        return;
-      }
+      var other = "SUPABASE_TABLE" === "books" ? "albums" : "books";
+      var r = await db.from(SUPABASE_TABLE).select("user_id, username").limit(1000);
+      var r2 = await db.from(other).select("user_id, username").limit(1000);
+      if (r.error) { console.warn("The Catalog: manager user list failed:", r.error.message); return; }
       var seen = {};
-      managerUsers = (r.data || []).filter(function (row) {
+      managerUsers = (r.data || []).concat((r2 && r2.data) || []).filter(function (row) {
         if (!row.user_id || seen[row.user_id]) return false;
         seen[row.user_id] = true;
         return true;
       }).map(function (row) {
-        // username column only exists for albums saved after 2.4.0 — fall
-        // back to a short id slice so the picker is still usable, then run
-        // the backfill SQL to restore real names
         return { user_id: row.user_id, username: row.username || ("user " + String(row.user_id).slice(0, 8)) };
       }).sort(function (a, b) { return a.username.localeCompare(b.username); });
     } catch (e) {}
   }
 
-  function managerSetupSql() {
-    return "create or replace function public.is_manager() returns boolean language sql stable as $$ select split_part(auth.jwt() ->> 'email', '@', 1) = 'nolanwsenter'; $$;\n" +
-      "drop policy if exists \"manager read all albums\" on public.albums;\n" +
-      "create policy \"manager read all albums\" on public.albums for select using (public.is_manager());\n" +
-      "alter table public.albums add column if not exists username text;\n" +
-      "update public.albums a set username = split_part(u.email, '@', 1) from auth.users u where a.user_id = u.id and coalesce(a.username, '') = '';\n" +
-      "alter table public.messages enable row level security;\n" +
-      "drop policy if exists \"manager insert messages\" on public.messages;\n" +
-      "create policy \"manager insert messages\" on public.messages for insert with check (public.is_manager());\n" +
-      "drop policy if exists \"read messages\" on public.messages;\n" +
-      "create policy \"read messages\" on public.messages for select using (to_user = auth.uid() or to_user is null or public.is_manager());\n" +
-      "grant select, insert on public.messages to anon, authenticated;";
-  }
-
   async function managerViewShelf(userId) {
     viewingUserId = userId;
-    setSyncNote("Viewing another account's shelf (manager mode) — changes here are not saved locally.");
+    setSyncNote("Viewing another account's shelf (manager mode) — read-only.");
     try {
-      var r = await db.from(SUPABASE_ALBUMS_TABLE).select("*").eq("user_id", userId).order("added_at", { ascending: true });
-      if (r.error) {
-        setSyncNote("Couldn't load that shelf — the manager policy may be missing (run the setup SQL).");
-        return;
-      }
-      applyRemoteAlbumRows(r.data || [], [], false);
-    } catch (e) {
-      setSyncNote("Couldn't reach the database while loading that shelf.");
-    }
+      var r = await db.from(SUPABASE_TABLE).select("*").eq("user_id", userId).order("added_at", { ascending: true });
+      if (r.error) { setSyncNote("Couldn't load that shelf — the manager policy may be missing (run the setup SQL)."); return; }
+      applyRemoteRows(r.data || [], false);
+    } catch (e) { setSyncNote("Couldn't reach the database while loading that shelf."); }
   }
 
   function buildManagerBar() {
@@ -651,30 +1057,25 @@
     var bar = document.createElement("div");
     bar.id = "managerBar";
     bar.className = "manager-bar";
-    var opts = '<option value="">My shelf</option>';
-    managerUsers.forEach(function (u) {
-      opts += '<option value="' + escapeHtml(u.user_id) + '">' + escapeHtml(u.username) + "</option>";
-    });
     bar.innerHTML =
       '<span class="mono manager-label">MANAGER</span>' +
-      '<select id="mgrUserSel" aria-label="View a user shelf">' + opts + "</select>" +
-      '<button class="btn btn-ghost" id="mgrMessagesBtn">Send banner</button>';
+      '<select id="mgrUserSel" aria-label="View a user shelf"><option value="">My shelf</option></select>' +
+      '<button class="btn btn-ghost" id="mgrSendBtn">Send banner</button>';
     var searchRow = document.querySelector(".search-row");
     searchRow.parentNode.insertBefore(bar, searchRow.nextSibling);
     document.getElementById("mgrUserSel").addEventListener("change", function () {
       var v = this.value;
       if (!v) {
         viewingUserId = null;
-        loadLocalFallback();
-        loadAlbumsForUser(currentUser.id);
+        try { loadLocalFallback(); } catch (e) {}
+        loadBooksForUser(currentUser.id);
       } else {
         managerViewShelf(v);
       }
     });
-    document.getElementById("mgrMessagesBtn").addEventListener("click", openComposeModal);
+    document.getElementById("mgrSendBtn").addEventListener("click", openComposeModal);
   }
 
-  /* ---------------- send a banner ---------------- */
   function openComposeModal() {
     openModal(
       '<h2 id="modalTitle">Send a banner</h2>' +
@@ -683,7 +1084,7 @@
         '<select id="msgTo"><option value="">Everyone (broadcast)</option>' +
         managerUsers.map(function (u) { return '<option value="' + escapeHtml(u.user_id) + '">' + escapeHtml(u.username) + "</option>"; }).join("") +
       "</select></div>" +
-      '<div class="field"><label for="msgBody">Message</label><input id="msgBody" type="text" maxlength="300" placeholder="e.g. Catalog updated — new albums added!"></div>' +
+      '<div class="field"><label for="msgBody">Message</label><input id="msgBody" type="text" maxlength="300" placeholder="e.g. New books added — check the catalog!"></div>' +
       '<div class="form-actions">' +
         '<button class="btn btn-ghost" id="msgCancel" type="button">Cancel</button>' +
         '<button class="btn btn-primary" id="msgSend" type="button">Send banner</button>' +
@@ -707,10 +1108,7 @@
     });
   }
 
-  /* ---------------- update banners ----------------
-     When the page loads (even with an old, still-valid session) and a
-     message arrived since this account was last online, a banner drops
-     down. "Got it" marks everything up to now as seen. */
+  /* ---------------- update banners (same system as the music page) ---------------- */
   var bannerTimer = null;
 
   function msgSeenKey() {
@@ -737,7 +1135,7 @@
       '<button class="btn btn-primary banner-dismiss" type="button">Got it</button>';
     document.body.appendChild(el);
     el.querySelector(".banner-dismiss").addEventListener("click", function () {
-      setLastSeen(m.created_at); // clears this and anything older
+      setLastSeen(m.created_at);
       el.remove();
     });
   }
@@ -745,19 +1143,19 @@
   async function refreshBanners() {
     if (!currentUser || !db) return;
     var rows;
-    try { rows = await fetchMessages(); } catch (e) {
-      console.warn("The Catalog: banner check failed:", (e && e.message) || e);
-      return;
-    }
+    try {
+      var r = await db.from("messages").select("*").order("created_at", { ascending: false }).limit(50);
+      if (r.error) return;
+      rows = r.data || [];
+    } catch (e) { return; }
     if (!rows.length) return;
     var last = getLastSeen();
     if (last === null) {
-      // first visit with this feature: baseline silently, no retroactive spam
-      setLastSeen(rows[0].created_at);
+      setLastSeen(rows[0].created_at); // first visit: baseline, no retroactive banners
       return;
     }
     var unseen = rows.filter(function (m) {
-      if (m.from_user === currentUser.id) return false; // never banner your own
+      if (m.from_user === currentUser.id) return false;
       return m.created_at > last;
     });
     if (unseen.length) showBanner(unseen[0], unseen.length - 1);
@@ -768,356 +1166,15 @@
     bannerTimer = setInterval(function () { refreshBanners(); }, 60000);
   }
 
-  /* ---------------- modal shell ---------------- */
-  var overlay = document.getElementById("overlay");
-  var modalBody = document.getElementById("modalBody");
-  function closeModal() {
-    overlay.hidden = true;
-    modalBody.innerHTML = "";
-    currentEditAlbumId = null;
-  }
-  document.getElementById("modalClose").addEventListener("click", closeModal);
-  overlay.addEventListener("click", function (e) { if (e.target === overlay) closeModal(); });
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !overlay.hidden) closeModal(); });
-  function openModal(html) {
-    modalBody.innerHTML = html;
-    overlay.hidden = false;
-  }
-
-  document.getElementById("openCreate").addEventListener("click", function () {
-    currentEditAlbumId = null;
-    renderAlbumOptionScreen();
-  });
-  document.getElementById("searchInput").addEventListener("input", renderAll);
-  document.getElementById("formatFilter").addEventListener("change", renderAll);
-
-  /* ---------------- add flow ---------------- */
-
-  function discogsReleaseUrl(album) {
-    if (!album) return null;
-    if (album.mbid) return "https://www.discogs.com/release/" + encodeURIComponent(album.mbid);
-    var parts = [];
-    if (album.artist) parts.push(album.artist);
-    if (album.title) parts.push(album.title);
-    if (!parts.length) return null;
-    return "https://www.discogs.com/search/?q=" + encodeURIComponent(parts.join(" - ")) + "&type=release";
-  }
-
-  function renderAlbumOptionScreen() {
-    openModal(
-      '<h2 id="modalTitle">Add an album</h2>' +
-      '<p class="modal-sub">Choose how you\'d like to bring in the details.</p>' +
-      '<div class="option-list">' +
-        '<button class="option-tile" id="optScratch">' +
-          '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="10" r="1.8" stroke="currentColor" stroke-width="1.4"/></svg></span>' +
-          '<span><strong>Enter it myself</strong><span>Type in the album, artist, and song list by hand.</span></span>' +
-        "</button>" +
-        '<button class="option-tile" id="optLookup">' +
-          '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.4"/><path d="M13.5 13.5L17 17" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>' +
-          '&nbsp;<span><strong>Search by album, artist, or UPC</strong><span>Looked up live in Discogs — track list included.</span></span>' +
-        "</button>" +
-      "</div>"
-    );
-    document.getElementById("optScratch").addEventListener("click", function () { renderAlbumForm(null); });
-    document.getElementById("optLookup").addEventListener("click", renderMusicLookupScreen);
-  }
-
-  function openAlbumEditForm(id) {
-    var a = albums.find(function (x) { return x.id === id; });
-    if (!a) return;
-    currentEditAlbumId = id;
-    renderAlbumForm(a);
-  }
-
-  function renderAlbumForm(prefill, opts) {
-    opts = opts || {};
-    var isEdit = !!(prefill && prefill.id);
-    var title = prefill && prefill.title || "";
-    var artist = prefill && prefill.artist || "";
-    var format = prefill && prefill.format || "CD";
-    var year = prefill && prefill.year || "";
-    var genre = prefill && prefill.genre || "";
-    var tracks = prefill && prefill.tracks ? prefill.tracks.join("\n") : "";
-
-    openModal(
-      (opts.backLabel ? '<button class="back-link" id="backBtn">‹ ' + escapeHtml(opts.backLabel) + "</button>" : "") +
-      '<h2 id="modalTitle">' + (isEdit ? "Edit album" : opts.reviewMode ? "Check the details" : "Enter it myself") + "</h2>" +
-      '<p class="modal-sub">' + (opts.reviewMode ? "Here's what turned up — fix anything that's off before saving." : "Fields marked with * are required. Put each song on its own line so you can search them later.") + "</p>" +
-      (opts.note ? '<div class="lookup-note">' + opts.note + "</div>" : "") +
-      '<form id="albumForm">' +
-        '<div class="field"><label for="aTitle">Album title *</label><input id="aTitle" type="text" required value="' + escapeHtml(title) + '"></div>' +
-        '<div class="field"><label for="aArtist">Artist *</label><input id="aArtist" type="text" required value="' + escapeHtml(artist) + '"></div>' +
-        '<div class="field"><label for="aFormat">Format</label><select id="aFormat">' +
-          MUSIC_FORMATS.map(function (f) { return '<option value="' + f + '"' + (f === format ? " selected" : "") + '>' + f + "</option>"; }).join("") +
-        "</select></div>" +
-        '<div class="field"><label for="aYear">Year</label><input id="aYear" type="number" min="1900" max="2100" value="' + escapeHtml(String(year)) + '" placeholder="e.g. 1977"></div>' +
-        '<div class="field"><label for="aGenre">Genre</label><input id="aGenre" type="text" list="musicGenreOptions" value="' + escapeHtml(genre) + '" placeholder="e.g. Rock">' +
-          '<datalist id="musicGenreOptions">' + MUSIC_GENRE_SUGGESTIONS.map(function (g) { return '<option value="' + g + '">'; }).join("") + "</datalist>" +
-        "</div>" +
-        '<div class="field"><label for="aTracks">Songs (one per line)</label><textarea id="aTracks" rows="8" placeholder="1. Song One&#10;2. Song Two&#10;3. Song Three">' + escapeHtml(tracks) + "</textarea></div>" +
-        '<div class="field"><label for="aCover">Cover image URL</label><input id="aCover" type="text" value="' + escapeHtml((prefill && prefill.cover) || "") + '" placeholder="https://… (auto-filled from Discogs; paste any image link)">' +
-          '<div class="field-hint">Leave blank to use the record-icon placeholder.</div>' +
-        "</div>" +
-        '<div class="field-error" id="formError" style="display:none;"></div>' +
-        '<div class="form-actions">' +
-          (isEdit ? '<button type="button" class="btn btn-danger" id="deleteBtn">Remove</button>' : "") +
-          '<button type="button" class="btn btn-ghost" id="cancelBtn">Cancel</button>' +
-          '<button type="submit" class="btn btn-primary">' + (isEdit ? "Save changes" : "Add to collection") + "</button>" +
-        "</div>" +
-      "</form>"
-    );
-
-    if (opts.backLabel) {
-      document.getElementById("backBtn").addEventListener("click", function () {
-        if (opts.onBack) opts.onBack(); else renderAlbumOptionScreen();
-      });
-    }
-    document.getElementById("cancelBtn").addEventListener("click", closeModal);
-    if (isEdit) {
-      document.getElementById("deleteBtn").addEventListener("click", function () {
-        if (confirm('Remove "' + prefill.title + '" from the music shelf?')) {
-          deleteAlbumById(prefill.id);
-          showToast("Removed from the collection.");
-          closeModal();
-        }
-      });
-    }
-
-    document.getElementById("albumForm").addEventListener("submit", function (e) {
-      e.preventDefault();
-      var t = document.getElementById("aTitle").value.trim();
-      var ar = document.getElementById("aArtist").value.trim();
-      var f = document.getElementById("aFormat").value;
-      var yr = parseInt(document.getElementById("aYear").value, 10) || null;
-      var g = document.getElementById("aGenre").value.trim();
-      var trackList = document.getElementById("aTracks").value.split("\n").map(function (s) { return s.trim(); }).filter(Boolean);
-      var coverUrl = document.getElementById("aCover").value.trim();
-      var errEl = document.getElementById("formError");
-      if (!t || !ar) {
-        errEl.textContent = "Album title and artist are needed before this goes on the music shelf.";
-        errEl.style.display = "block";
-        return;
-      }
-      var album = {
-        id: isEdit ? prefill.id : uid(),
-        title: t, artist: ar, format: f, year: yr, genre: g,
-        tracks: trackList,
-        mbid: (prefill && prefill.mbid) || "",
-        cover: coverUrl,
-        ownerId: (prefill && prefill.ownerId) || (currentUser ? currentUser.id : null),
-        addedAt: (prefill && prefill.addedAt) || new Date().toISOString()
-      };
-      persistAlbum(album);
-      showToast(isEdit ? "Changes saved." : '"' + t + '" added to the collection.');
-      closeModal();
-    });
-  }
-
-  /* ---------------- MusicBrainz lookup ---------------- */
-  function renderMusicLookupScreen() {
-    openModal(
-      '<button class="back-link" id="backBtn">‹ Back</button>' +
-      '<h2 id="modalTitle">Search by album, artist, or UPC</h2>' +
-      '<p class="modal-sub">Looked up live in Discogs — album art, format, and the full track list come along for the ride.</p>' +
-      '<div class="lookup-row">' +
-        '<input id="lookupInput" type="text" placeholder="e.g. Rumours Fleetwood Mac, or a UPC barcode number">' +
-        '<button class="btn btn-primary" id="lookupGo">Look up</button>' +
-      "</div>" +
-      '<p class="status-line" id="lookupStatus"></p>'
-    );
-    document.getElementById("backBtn").addEventListener("click", renderAlbumOptionScreen);
-    var input = document.getElementById("lookupInput");
-    input.focus();
-    var go = document.getElementById("lookupGo");
-    function run() {
-      var q = input.value.trim();
-      if (!q) return;
-      runMusicLookup(q, "Search by album, artist, or UPC");
-    }
-    go.addEventListener("click", run);
-    input.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); run(); } });
-  }
-
-  async function runMusicLookup(query, backLabel) {
-    var statusEl = document.getElementById("lookupStatus");
-    var go = document.getElementById("lookupGo");
-    if (statusEl) statusEl.innerHTML = '<span class="spinner"></span> Searching Discogs…';
-    if (go) go.disabled = true;
-
-    if (!discogsConfigured()) {
-      renderAlbumForm({}, {
-        backLabel: backLabel, onBack: renderAlbumOptionScreen,
-        note: "Album lookup isn't connected to Discogs yet — the site owner needs to deploy the lookup proxy (see the notes in music.js), or paste a token at the top of music.js for personal use. Until then, enter albums by hand below."
-      });
-      return;
-    }
-
-    var digits = query.replace(/[-\s]/g, "");
-    var looksLikeUpc = /^\d{8,14}$/.test(digits);
-    var searchQ = looksLikeUpc ? "barcode:" + digits : query;
-    var scratchPrefill = looksLikeUpc ? {} : { title: query };
-
-    function fmtFromDiscogs(formats) {
-      var f = (formats && formats.length && formats[0].name || "").toLowerCase();
-      if (f.indexOf("vinyl") !== -1) return "Vinyl";
-      if (f.indexOf("cassette") !== -1) return "Cassette";
-      if (f.indexOf("cd") !== -1 || f.indexOf("album") !== -1) return "CD";
-      if (f.indexOf("file") !== -1 || f.indexOf("digital") !== -1) return "Digital";
-      return "Other";
-    }
-    function releaseToCandidate(r) {
-      var artist = (r.artists || []).map(function (a) { return a.name; }).filter(Boolean).join(", ");
-      var img = (r.images && r.images.length && (r.images[0].uri || r.images[0].resource_url)) || "";
-      return {
-        mbid: String(r.id),
-        title: r.title || "",
-        artist: artist,
-        year: r.year || null,
-        format: fmtFromDiscogs(r.formats),
-        trackCount: r.tracklist ? r.tracklist.length : 0,
-        cover: img
-      };
-    }
-
-    try {
-      var data = await fetchDiscogs("/database/search?q=" + encodeURIComponent(searchQ) + "&type=release&per_page=5");
-      var candidates = (data.results || []).map(releaseToCandidate).filter(function (c) { return c.title || c.artist; });
-
-      if (candidates.length === 0) {
-        renderAlbumForm(scratchPrefill, {
-          backLabel: backLabel, onBack: renderAlbumOptionScreen,
-          note: "Couldn't find that one in Discogs — no trouble, just fill in what you know below."
-        });
-      } else if (candidates.length === 1) {
-        await renderAlbumReview(candidates[0], backLabel);
-      } else {
-        renderMusicCandidateScreen(candidates, query, backLabel);
-      }
-    } catch (e) {
-      var raw = String((e && e.message) || "unknown");
-      var note;
-      if (DISCOGS_PROXY && /proxy http 4/i.test(raw)) {
-        note = "The Discogs proxy isn't there yet (" + raw + "). In Supabase: Edge Functions → create a function named exactly discogs-proxy → paste in discogs-proxy.ts → add the DISCOGS_TOKEN secret → deploy.";
-      } else if (/proxy http 500|token not configured/i.test(raw)) {
-        note = "The proxy is deployed but its DISCOGS_TOKEN secret is missing or wrong — add it in the function's Secrets (discogs.com → Settings → Developers → Generate token).";
-      } else if (DISCOGS_PROXY && /Failed to fetch|network|timeout/i.test(raw)) {
-        note = "Your browser couldn't reach the proxy at all (" + raw + "). Either it isn't deployed yet, or this network is blocking it (school filters block unknown domains — try a phone hotspot to confirm).";
-      } else if (/token/i.test(raw)) {
-        note = "Discogs rejected the token — check the DISCOGS_TOKEN secret or the token at the top of music.js.";
-      } else {
-        note = "The lookup didn't go through (" + raw + ") — fill in the details by hand.";
-      }
-      renderAlbumForm({ title: scratchPrefill.title || "", artist: "", format: "CD", tracks: [] }, {
-        backLabel: backLabel, onBack: renderAlbumOptionScreen, note: note
-      });
-    }
-  }
-
-  async function fetchMusicRelease(dgid) {
-    var rel = await fetchDiscogs("/releases/" + encodeURIComponent(dgid));
-    var tracks = (rel.tracklist || []).map(function (t) {
-      return String(t.title || "").trim();
-    }).filter(Boolean);
-    var artist = (rel.artists || []).map(function (a) { return a.name; }).filter(Boolean).join(", ");
-    var img = (rel.images && rel.images.length && (rel.images[0].uri || rel.images[0].resource_url)) || "";
-    var f = ((rel.formats && rel.formats.length && rel.formats[0].name) || "").toLowerCase();
-    var format = "Other";
-    if (f.indexOf("vinyl") !== -1) format = "Vinyl";
-    else if (f.indexOf("cassette") !== -1) format = "Cassette";
-    else if (f.indexOf("cd") !== -1 || f.indexOf("album") !== -1) format = "CD";
-    else if (f.indexOf("file") !== -1 || f.indexOf("digital") !== -1) format = "Digital";
-    var genre = "";
-    if (rel.genres && rel.genres.length) {
-      genre = String(rel.genres[0]);
-      genre = genre.charAt(0).toUpperCase() + genre.slice(1);
-    } else if (rel.styles && rel.styles.length) {
-      genre = String(rel.styles[0]);
-      genre = genre.charAt(0).toUpperCase() + genre.slice(1);
-    }
-    return {
-      mbid: String(rel.id),
-      title: rel.title || "",
-      artist: artist,
-      year: rel.year || null,
-      format: format,
-      genre: genre,
-      tracks: tracks,
-      cover: img
-    };
-  }
-
-  async function renderAlbumReview(candidate, backLabel) {
-    var statusEl = document.getElementById("lookupStatus");
-    if (statusEl) statusEl.innerHTML = '<span class="spinner"></span> Fetching the track list…';
-    try {
-      var full = await fetchMusicRelease(candidate.mbid);
-      full.genre = full.genre || candidate.genre || "";
-      if (!full.cover && candidate.cover) full.cover = candidate.cover;
-      renderAlbumForm(full, {
-        backLabel: backLabel, onBack: renderAlbumOptionScreen, reviewMode: true,
-        note: "Filled in live from Discogs — give it a quick check before saving."
-      });
-    } catch (e) {
-      renderAlbumForm({ title: candidate.title, artist: candidate.artist, format: candidate.format || "CD", year: candidate.year, genre: "", tracks: [], mbid: candidate.mbid }, {
-        backLabel: backLabel, onBack: renderAlbumOptionScreen, reviewMode: true,
-        note: "Found the album, but the track list didn't come through — add the songs below by hand."
-      });
-    }
-  }
-
-  function renderMusicCandidateScreen(candidates, query, backLabel) {
-    openModal(
-      '<button class="back-link" id="backBtn">‹ Back</button>' +
-      '<h2 id="modalTitle">A few albums match "' + escapeHtml(query) + '"</h2>' +
-      '<p class="modal-sub">Pick the one you mean — you\'ll get a chance to fix any details next.</p>' +
-      '<div class="option-list">' +
-        candidates.map(function (c, i) {
-          return (
-            '<button class="option-tile candidate-tile" data-idx="' + i + '">' +
-              '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="10" r="1.8" stroke="currentColor" stroke-width="1.4"/></svg></span>' +
-              '<span><strong>' + escapeHtml(c.title || "Untitled") + '</strong><span>' +
-                escapeHtml(c.artist || "Unknown artist") +
-                (c.year ? " · " + c.year : "") +
-                (c.format ? " · " + escapeHtml(c.format) : "") +
-                (c.trackCount ? " · " + c.trackCount + " songs" : "") +
-              "</span></span>" +
-            "</button>"
-          );
-        }).join("") +
-        '<button class="option-tile" id="noneMatch">' +
-          '<span class="opt-icon"><svg viewBox="0 0 20 20" fill="none"><path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>' +
-          '<span><strong>None of these</strong><span>Enter the details myself instead.</span></span>' +
-        "</button>" +
-      "</div>"
-    );
-    document.getElementById("backBtn").addEventListener("click", renderAlbumOptionScreen);
-    document.getElementById("noneMatch").addEventListener("click", function () {
-      renderAlbumForm({ title: query, tracks: [] }, { backLabel: backLabel, onBack: renderAlbumOptionScreen });
-    });
-    Array.prototype.forEach.call(document.querySelectorAll(".candidate-tile"), function (btn) {
-      btn.addEventListener("click", function () {
-        renderAlbumReview(candidates[Number(btn.getAttribute("data-idx"))], backLabel);
-      });
-    });
-  }
-
-  /* ---------------- session / boot ---------------- */
   function showApp(user) {
     currentUser = { id: user.id, username: emailToUsername(user.email, user.user_metadata && user.user_metadata.username) , meta: user.user_metadata || {} };
-    document.getElementById("whoami").textContent = currentUser.username;
-    var logoutBtn = document.getElementById("logoutBtn");
-    logoutBtn.hidden = false;
-    document.getElementById("loginLink").hidden = true;
-    // switch to this user's own browser stash (abandons any anon-session
-    // albums, which live separately under the anon key)
-    try { loadLocalFallback(); } catch (e) {}
+    setBootStatus("");
     refreshBanners();
     startBannerPolling();
     setTimeout(maybePromptEmail, 1500);
     if (isManager()) {
       managerLoadUsers().then(function () {
         buildManagerBar();
-        // re-label with usernames once the user list arrives
         var sel = document.getElementById("mgrUserSel");
         if (sel) {
           sel.innerHTML = '<option value="">My shelf</option>' + managerUsers.map(function (u) {
@@ -1126,6 +1183,9 @@
         }
       });
     }
+    document.getElementById("whoami").textContent = currentUser.username;
+    var logoutBtn = document.getElementById("logoutBtn");
+    logoutBtn.hidden = false;
     if (!logoutBtn._wired) {
       logoutBtn._wired = true;
       logoutBtn.addEventListener("click", async function () {
@@ -1133,7 +1193,17 @@
         window.location.href = "login.html";
       });
     }
-    loadAlbumsForUser(currentUser.id);
+    usingLocalFallback = false;
+    try { loadLocalFallback(); } catch (e) {}
+    loadDataForUser(currentUser.id);
+  }
+
+  function showLocalOnly() {
+    sessionStorage.setItem("catalogLocalOnly", "1");
+    setBootStatus("");
+    document.getElementById("whoami").textContent = "";
+    document.getElementById("logoutBtn").hidden = true;
+    initLocalOnlyMode();
   }
 
   async function getSessionWithRetries(tries) {
@@ -1149,34 +1219,23 @@
   }
 
   async function boot() {
-    // Local-first: your albums appear instantly, even if the account
-    // service or CDN is slow/blocked. Cloud sync upgrades in the background.
-    setBootStatus("Loading your music shelf…");
-    try { loadLocalFallback(); } catch (e) {}
-    setSyncNote("Saved to this browser. Checking for your account…");
+    if (sessionStorage.getItem("catalogLocalOnly")) {
+      showLocalOnly();
+      return;
+    }
     try {
       await connectSupabase();
-      var session = await getSessionWithRetries(3);
+      setBootStatus("Checking for an existing session…");
+      var session = await getSessionWithRetries(4);
       if (session && session.user) {
-        setBootStatus("");
         showApp(session.user);
-        setTimeout(function () { ensureCovers(); }, 3000);
-      } else {
-        usingLocalFallback = true;
-        setSyncNote('Saved to this browser only — log in to sync your music shelf.');
-        document.getElementById("loginLink").hidden = false;
+        return;
       }
+      setBootStatus("");
+      window.location.href = "login.html";
     } catch (e) {
-      usingLocalFallback = true;
-      setSyncNote("Saved to this browser only (account service unreachable).");
-      document.getElementById("loginLink").hidden = false;
-      setBootStatus("Account service unreachable — showing this browser's saved albums. (" + ((e && e.message) || "unknown") + ")", true);
-    }
-    // last-resort guarantee: the shelf is ALWAYS rendered, no matter what
-    try { renderAll(); } catch (e2) {
-      setBootStatus("Couldn't display albums: " + ((e2 && e2.message) || e2), true);
+      setBootStatus("Couldn't reach the account service: " + ((e && e.message) || "unknown") + " — use \u201cSkip for now\u201d on the login page to catalog in this browser.");
     }
   }
-  populateFormatFilter();
   boot();
 })();
