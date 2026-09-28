@@ -339,6 +339,12 @@
   /* Cover images on filtered networks often start loading then get their
      connection reset (load-then-disappear). Retry a few times before
      giving up on the placeholder icon. */
+  var DISCOGS_IMG_HOSTS = /^https:\/\/(i\.discogs\.com|s\.pixogs\.com|api\.discogs\.com)\//;
+  function proxiedCoverUrl(u) {
+    if (!DISCOGS_PROXY || !DISCOGS_IMG_HOSTS.test(u)) return null;
+    return DISCOGS_PROXY + "?img=" + encodeURIComponent(u);
+  }
+
   function armCoverImages(root) {
     Array.prototype.forEach.call(root.querySelectorAll(".cover-img"), function (img) {
       if (img._armed) return;
@@ -346,9 +352,17 @@
       var tries = 0;
       img.addEventListener("error", function () {
         tries++;
-        if (tries < 3 && img.src) {
+        var base = img.src.split("#")[0];
+        // first failure on a discogs host: reroute through the proxy
+        // (school networks often block i.discogs.com outright; the proxy
+        // domain is already allowed because the whole site depends on it)
+        if (tries === 1) {
+          var p = proxiedCoverUrl(base);
+          if (p) { img.src = p; return; }
+        }
+        if (tries < 4 && base) {
           setTimeout(function () {
-            img.src = img.src.split("#")[0] + "#retry" + tries;
+            img.src = base + "#retry" + tries;
           }, 900 * tries);
         } else {
           img.style.display = "none";
@@ -1048,7 +1062,6 @@
   async function boot() {
     // Local-first: your albums appear instantly, even if the account
     // service or CDN is slow/blocked. Cloud sync upgrades in the background.
-    //hi
     setBootStatus("Loading your music shelf…");
     try { loadLocalFallback(); } catch (e) {}
     setSyncNote("Saved to this browser. Checking for your account…");
