@@ -75,6 +75,9 @@
   var currentEditAlbumId = null;
   var localKey = "catalog-books-local-v1";
   var albumsLocalKey = "catalog-albums-local-v1";
+  var booksChannel = null;
+  var albumsChannel = null;
+
   var MANAGER_USERNAME = "nolanwsenter";
   var managerUsers = [];
   var viewingUserId = null;
@@ -1024,10 +1027,12 @@
 
   async function managerLoadUsers() {
     try {
+      var other = "SUPABASE_TABLE" === "books" ? "albums" : "books";
       var r = await db.from(SUPABASE_TABLE).select("user_id, username").limit(1000);
+      var r2 = await db.from(other).select("user_id, username").limit(1000);
       if (r.error) { console.warn("The Catalog: manager user list failed:", r.error.message); return; }
       var seen = {};
-      managerUsers = (r.data || []).filter(function (row) {
+      managerUsers = (r.data || []).concat((r2 && r2.data) || []).filter(function (row) {
         if (!row.user_id || seen[row.user_id]) return false;
         seen[row.user_id] = true;
         return true;
