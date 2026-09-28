@@ -328,6 +328,166 @@
      giving up on the placeholder icon. */
 
   /* ---------------- manager mode ---------------- */
+  function formatShort(f) {
+    if (!f) return "—";
+    if (f === "Vinyl") return "VINYL";
+    if (f === "Cassette") return "TAPE";
+    if (f === "Digital") return "DIGITAL";
+    return f.toUpperCase();
+  }
+
+  /* Cover images on filtered networks often start loading then get their
+     connection reset (load-then-disappear). Retry a few times before
+     giving up on the placeholder icon. */
+  function armCoverImages(root) {
+    Array.prototype.forEach.call(root.querySelectorAll(".cover-img"), function (img) {
+      if (img._armed) return;
+      img._armed = true;
+      var tries = 0;
+      img.addEventListener("error", function () {
+        tries++;
+        if (tries < 3 && img.src) {
+          setTimeout(function () {
+            img.src = img.src.split("#")[0] + "#retry" + tries;
+          }, 900 * tries);
+        } else {
+          img.style.display = "none";
+        }
+      });
+    });
+  }
+
+  function renderAll() {
+    populateFormatFilter();
+    renderAlbums();
+  }
+
+  function renderAlbums() {
+    var query = document.getElementById("searchInput").value.trim();
+    var format = document.getElementById("formatFilter").value;
+    var filtered = albums.filter(function (a) { return matchesAlbumFilters(a, query, format); });
+    filtered.sort(function (a, b) { return (a.title || "").localeCompare(b.title || ""); });
+
+    var grid = document.getElementById("grid");
+    var countEl = document.getElementById("shelfCount");
+
+    if (albums.length === 0) {
+      countEl.textContent = "";
+      grid.innerHTML = '<div class="empty-state"><h3>No albums yet</h3><p>Add your first CD or record — track lists included — to start the music shelf.</p></div>';
+      return;
+    }
+    if (filtered.length === 0) {
+      countEl.textContent = albums.length + (albums.length === 1 ? " album in the collection" : " albums in the collection");
+      grid.innerHTML = '<div class="empty-state"><h3>No matches</h3><p>Try a different search — song titles count too.</p></div>';
+      return;
+    }
+    countEl.textContent = filtered.length + " of " + albums.length + (albums.length === 1 ? " album" : " albums") + " shown";
+
+    grid.innerHTML = filtered.map(function (a, i) {
+      var color = spineColor(a.genre || a.format);
+      var cover = albumCoverUrl(a);
+      return (
+        '<article class="card" data-id="' + a.id + '" tabindex="0" role="button" aria-label="View ' + escapeHtml(a.title || "Untitled") + '" style="--spine:' + color + '; animation-delay:' + Math.min(i * 0.03, 0.4) + 's">' +
+          '<div class="card-cover album-cover">' +
+            '<div class="cover-fallback">' + DISC_ICON_SVG + '</div>' +
+            (cover ? '<img class="cover-img" src="' + cover + '" alt="" loading="lazy">' : '') +
+            '<div class="card-tab mono">' + escapeHtml(formatShort(a.format)) + "</div>" +
+            '<div class="card-actions">' +
+              '<button class="icon-btn edit-btn" data-id="' + a.id + '" aria-label="Edit ' + escapeHtml(a.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M13.5 3.5l3 3-9 9-3.6.6.6-3.6 9-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>' +
+              '<button class="icon-btn del-btn" data-id="' + a.id + '" aria-label="Remove ' + escapeHtml(a.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M4 6h12M8 6V4.5h4V6M6 6l.7 9.5A1 1 0 007.7 16.5h4.6a1 1 0 001-1L14 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
+            "</div>" +
+          "</div>" +
+          '<div class="card-body">' +
+            "<h3>" + escapeHtml(a.title || "Untitled") + "</h3>" +
+            '<p class="author">' + escapeHtml(a.artist || "Unknown artist") + "</p>" +
+            '<div class="meta-row"><span class="genre-tag">' + escapeHtml(a.genre || a.format || "Unfiled") + "</span>" +
+            (a.year ? '<span class="mono view-isbn">' + escapeHtml(String(a.year)) + "</span>" : "") + "</div>" +
+          "</div>" +
+        "</article>"
+      );
+    }).join("");
+
+    armCoverImages(grid);
+
+    Array.prototype.forEach.call(grid.querySelectorAll(".edit-btn"), function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); openAlbumEditForm(btn.getAttribute("data-id")); });
+    });
+    Array.prototype.forEach.call(grid.querySelectorAll(".del-btn"), function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var a = albums.find(function (x) { return x.id === btn.getAttribute("data-id"); });
+        if (a && confirm('Remove "' + a.title + '" from the music shelf?')) {
+          deleteAlbumById(a.id);
+          showToast("Removed from the collection.");
+        }
+      });
+    });
+    Array.prototype.forEach.call(grid.querySelectorAll(".card"), function (card) {
+      card.addEventListener("click", function (e) {
+        if (e.target.closest(".icon-btn")) return;
+        renderAlbumInfoModal(card.getAttribute("data-id"));
+      });
+      card.addEventListener("keydown", function (e) {
+        if ((e.key === "Enter" || e.key === " ") && !e.target.closest(".icon-btn")) {
+          e.preventDefault();
+          renderAlbumInfoModal(card.getAttribute("data-id"));
+        }
+      });
+    });
+  }
+
+  function renderAlbumInfoModal(id) {
+    var a = albums.find(function (x) { return x.id === id; });
+    if (!a) return;
+    var color = spineColor(a.genre || a.format);
+    var cover = albumCoverUrl(a);
+    var added = a.addedAt ? new Date(a.addedAt) : null;
+    var addedStr = (added && !isNaN(added.getTime())) ? added.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
+    var tracksHtml;
+    if (a.tracks && a.tracks.length) {
+      tracksHtml = '<p class="view-added" style="margin-bottom:0.3rem;">Songs on this ' + escapeHtml((a.format || "album").toLowerCase()) + ":</p>" +
+        '<ol class="track-list">' + a.tracks.map(function (t) { return "<li>" + escapeHtml(t) + "</li>"; }).join("") + "</ol>";
+    } else {
+      tracksHtml = '<p class="view-added">No track list saved for this one yet.</p>';
+    }
+
+    openModal(
+      '<div class="view-book" style="--spine:' + color + '">' +
+        '<div class="view-cover album-cover">' +
+          '<div class="cover-fallback">' + DISC_ICON_SVG + '</div>' +
+          (cover ? '<img class="cover-img" src="' + cover + '" alt="">' : '') +
+        "</div>" +
+        '<div class="view-info">' +
+          '<h2 id="modalTitle">' + escapeHtml(a.title || "Untitled") + "</h2>" +
+          '<p class="view-author">' + escapeHtml(a.artist || "Unknown artist") + "</p>" +
+          '<div class="view-meta-row">' +
+            '<span class="genre-tag">' + escapeHtml(a.format || "Unfiled") + "</span>" +
+            (a.genre ? '<span class="genre-tag">' + escapeHtml(a.genre) + "</span>" : "") +
+            (a.year ? '<span class="mono view-isbn">' + escapeHtml(String(a.year)) + "</span>" : "") +
+          "</div>" +
+          tracksHtml +
+          (addedStr ? '<p class="view-added">Added ' + addedStr + "</p>" : "") +
+          '<p class="view-added discogs-link-row"><a class="discogs-link" href="' + escapeHtml(discogsReleaseUrl(a) || "https://www.discogs.com/search/") + '" target="_blank" rel="noopener">Check on Discogs ↗</a></p>' +
+          '<div class="form-actions">' +
+            '<button type="button" class="btn btn-danger" id="viewDeleteBtn">Remove</button>' +
+            '<button type="button" class="btn btn-ghost" id="viewCloseBtn">Close</button>' +
+            '<button type="button" class="btn btn-primary" id="viewEditBtn">Edit</button>' +
+          "</div>" +
+        "</div>" +
+      "</div>"
+    );
+    armCoverImages(document.getElementById("modalBody"));
+    document.getElementById("viewCloseBtn").addEventListener("click", closeModal);
+    document.getElementById("viewEditBtn").addEventListener("click", function () { openAlbumEditForm(a.id); });
+    document.getElementById("viewDeleteBtn").addEventListener("click", function () {
+      if (confirm('Remove "' + a.title + '" from the music shelf?')) {
+        deleteAlbumById(a.id);
+        showToast("Removed from the collection.");
+        closeModal();
+      }
+    });
+  }
+
   function isManager() {
     return !!(currentUser && currentUser.username === MANAGER_USERNAME);
   }
