@@ -74,12 +74,17 @@
   var currentEditAlbumId = null;
   var localKey = "catalog-books-local-v1";
   var albumsLocalKey = "catalog-albums-local-v1";
-  var currentUser = null;
-  var booksChannel = null;
+  var MANAGER_USERNAME = "nolanwsenter";
+  var managerUsers = [];
+  var viewingUserId = null;
   var albumsChannel = null;
 
   var SUPABASE_URL = "https://wgyrpvrzafubezcxqrzy.supabase.co";
   var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndneXJwdnJ6YWZ1YmV6Y3hxcnp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxODI2NjYsImV4cCI6MjEwNTc1ODY2Nn0.rGn52ohlPcbKKoiRU3vsd1IrPeE5id6eriDD_JR8jco";
+  var MANAGER_USERNAME = "nolanwsenter";
+  var managerUsers = [];
+  var viewingUserId = null;
+
   var SUPABASE_TABLE = "books";
   var SUPABASE_ALBUMS_TABLE = "albums";
 
@@ -160,14 +165,18 @@
 
   function setSyncNote(text) { document.getElementById("syncNote").textContent = text; }
 
-  function applyRemoteRows(rows) {
+  function applyRemoteRows(rows, saveLocally) {
+    if (!Array.isArray(rows)) return;
+    if (saveLocally === undefined) saveLocally = true;
     books = rows.map(function (r) {
       return {
         id: String(r.id), title: r.title || "", author: r.author || "",
         genre: r.genre || "", isbn: r.isbn || "", quantity: r.quantity || 1,
+        username: r.username || "",
         addedAt: r.added_at || r.addedAt || new Date().toISOString()
       };
     });
+    if (saveLocally) saveLocalFallback();
     renderAll();
   }
   function applyRemoteAlbumRows(rows) {
@@ -249,10 +258,19 @@
     async function fetchBooks() {
       return db.from(SUPABASE_TABLE).select("*").eq("user_id", userId).order("added_at", { ascending: true });
     }
-    var res = await fetchBooks();
-    if (res.error && /schema/i.test(res.error.message || "")) {
-      await new Promise(function (r) { setTimeout(r, 2000); });
+    var res;
+    try {
       res = await fetchBooks();
+    } catch (netErr) {
+      res = { error: { message: String((netErr && netErr.message) || "network") } };
+    }
+    if (res.error && /schema|Failed to fetch|network|timeout/i.test(res.error.message || "")) {
+      await new Promise(function (r) { setTimeout(r, 2000); });
+      try {
+        res = await fetchBooks();
+      } catch (netErr2) {
+        res = { error: { message: String((netErr2 && netErr2.message) || "network") } };
+      }
     }
     if (res.error) {
       console.warn("The Catalog: books load failed. Setup SQL:\n\n" + setupSql());
@@ -304,6 +322,7 @@
   }
 
   async function persistBook(book) {
+    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
     if (usingLocalFallback || !db) {
       upsertLocalBook(book); saveLocalFallback(); renderAll(); return;
     }
@@ -311,6 +330,7 @@
       id: book.id, title: book.title, author: book.author,
       genre: book.genre || null, isbn: book.isbn || null,
       quantity: book.quantity || 1,
+      username: currentUser ? currentUser.username : (book.username || null),
       added_at: book.addedAt, user_id: currentUser ? currentUser.id : null
     };
     var res = await db.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" });
@@ -319,6 +339,7 @@
   }
 
   async function deleteBookById(id) {
+    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
     if (usingLocalFallback || !db) {
       removeLocalBook(id); saveLocalFallback(); renderAll(); return;
     }
@@ -953,6 +974,92 @@
 
   /* ---------------- session / boot ---------------- */
 
+  /* ---------------- manager mode ---------------- */
+  function isManager() {
+    return !!(currentUser && currentUser.username === MANAGER_USERNAME);
+  }
+
+  async function managerLoadUsers() {
+    try {
+      var r = await db.from(SUPABASE_TABLE).select("user_id, username").limit(1000);
+      if (r.error) { console.warn("The Catalog: manager user list failed:", r.error.message); return; }
+      var seen = {};
+      managerUsers = (r.data || []).filter(function (row) {
+        if (!row.user_id || seen[row.user_id]) return false;
+        seen[row.user_id] = true;
+        return true;
+      }).map(function (row) {
+        return { user_id: row.user_id, username: row.username || ("user " + String(row.user_id).slice(0, 8)) };
+      }).sort(function (a, b) { return a.username.localeCompare(b.username); });
+    } catch (e) {}
+  }
+
+  async function managerViewShelf(userId) {
+    viewingUserId = userId;
+    setSyncNote("Viewing another account's shelf (manager mode) — read-only.");
+    try {
+      var r = await db.from(SUPABASE_TABLE).select("*").eq("user_id", userId).order("added_at", { ascending: true });
+      if (r.error) { setSyncNote("Couldn't load that shelf — the manager policy may be missing (run the setup SQL)."); return; }
+      applyRemoteRows(r.data || [], false);
+    } catch (e) { setSyncNote("Couldn't reach the database while loading that shelf."); }
+  }
+
+  function buildManagerBar() {
+    if (!isManager() || document.getElementById("managerBar")) return;
+    var bar = document.createElement("div");
+    bar.id = "managerBar";
+    bar.className = "manager-bar";
+    bar.innerHTML =
+      '<span class="mono manager-label">MANAGER</span>' +
+      '<select id="mgrUserSel" aria-label="View a user shelf"><option value="">My shelf</option></select>' +
+      '<button class="btn btn-ghost" id="mgrSendBtn">Send banner</button>';
+    var searchRow = document.querySelector(".search-row");
+    searchRow.parentNode.insertBefore(bar, searchRow.nextSibling);
+    document.getElementById("mgrUserSel").addEventListener("change", function () {
+      var v = this.value;
+      if (!v) {
+        viewingUserId = null;
+        try { loadLocalFallback(); } catch (e) {}
+        loadBooksForUser(currentUser.id);
+      } else {
+        managerViewShelf(v);
+      }
+    });
+    document.getElementById("mgrSendBtn").addEventListener("click", openComposeModal);
+  }
+
+  function openComposeModal() {
+    openModal(
+      '<h2 id="modalTitle">Send a banner</h2>' +
+      '<p class="modal-sub">Recipients see it as a banner the next time they load the site (or within a minute while it\'s open).</p>' +
+      '<div class="field"><label for="msgTo">To</label>' +
+        '<select id="msgTo"><option value="">Everyone (broadcast)</option>' +
+        managerUsers.map(function (u) { return '<option value="' + escapeHtml(u.user_id) + '">' + escapeHtml(u.username) + "</option>"; }).join("") +
+      "</select></div>" +
+      '<div class="field"><label for="msgBody">Message</label><input id="msgBody" type="text" maxlength="300" placeholder="e.g. New books added — check the catalog!"></div>' +
+      '<div class="form-actions">' +
+        '<button class="btn btn-ghost" id="msgCancel" type="button">Cancel</button>' +
+        '<button class="btn btn-primary" id="msgSend" type="button">Send banner</button>' +
+      "</div>"
+    );
+    document.getElementById("msgCancel").addEventListener("click", closeModal);
+    document.getElementById("msgBody").focus();
+    document.getElementById("msgSend").addEventListener("click", async function () {
+      var body = document.getElementById("msgBody").value.trim();
+      if (!body) return;
+      this.disabled = true;
+      var to = document.getElementById("msgTo").value || null;
+      var res = await db.from("messages").insert({
+        id: uid(), from_user: currentUser.id, from_username: currentUser.username,
+        to_user: to, body: body
+      });
+      this.disabled = false;
+      if (res.error) { showToast("Couldn't send — try again."); return; }
+      showToast(to ? "Banner sent." : "Banner broadcast to everyone.");
+      closeModal();
+    });
+  }
+
   /* ---------------- update banners (same system as the music page) ---------------- */
   var bannerTimer = null;
 
@@ -1016,6 +1123,17 @@
     setBootStatus("");
     refreshBanners();
     startBannerPolling();
+    if (isManager()) {
+      managerLoadUsers().then(function () {
+        buildManagerBar();
+        var sel = document.getElementById("mgrUserSel");
+        if (sel) {
+          sel.innerHTML = '<option value="">My shelf</option>' + managerUsers.map(function (u) {
+            return '<option value="' + escapeHtml(u.user_id) + '">' + escapeHtml(u.username) + "</option>";
+          }).join("");
+        }
+      });
+    }
     document.getElementById("whoami").textContent = currentUser.username;
     var logoutBtn = document.getElementById("logoutBtn");
     logoutBtn.hidden = false;
@@ -1027,9 +1145,7 @@
       });
     }
     usingLocalFallback = false;
-    books = [];
-    albums = [];
-    renderAll();
+    try { loadLocalFallback(); } catch (e) {}
     loadDataForUser(currentUser.id);
   }
 
