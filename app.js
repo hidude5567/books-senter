@@ -9,7 +9,7 @@
     bootStatusEl.classList.toggle("boot-status-error", !!isError);
   }
   window.addEventListener("error", function (e) {
-    setBootStatus("Script error: " + ((e && e.message) || "unknown"), true);
+    setBootStatus("Script error on " + location.pathname + ": " + ((e && e.message) || "unknown") + " — tell the site owner this text", true);
   });
   window.addEventListener("unhandledrejection", function (e) {
     var r = e && e.reason;
