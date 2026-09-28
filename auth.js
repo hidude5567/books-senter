@@ -107,6 +107,9 @@
   }
 
   function wireForm() {
+    // the submit button starts disabled in the HTML; only enable it once
+    // the form is actually wired up
+    document.getElementById("authSubmit").disabled = false;
     document.getElementById("tabLogin").addEventListener("click", function () { setMode("login"); });
     document.getElementById("tabSignup").addEventListener("click", function () { setMode("signup"); });
 
