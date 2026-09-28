@@ -548,6 +548,48 @@
     });
   }
 
+
+  /* One-time email catch-up: accounts created before the signup form had
+     an email field get asked once. Saved through the account-email edge
+     function (service role), since users can't edit auth metadata directly. */
+  var EMAIL_FN = "https://wgyrpvrzafubezcxqrzy.supabase.co/functions/v1/account-email";
+
+  function maybePromptEmail() {
+    if (!currentUser) return;
+    var meta = currentUser.meta || {};
+    if (meta.email) return;
+    openModal(
+      '<h2 id="modalTitle">Add your email</h2>' +
+      '<p class="modal-sub">So the site can reach you with catalog updates. Never shared, never verified — just saved to your account.</p>' +
+      '<div class="field"><label for="emailCatchup">Email</label><input id="emailCatchup" type="email" placeholder="you@example.com"></div>' +
+      '<div class="form-actions">' +
+        '<button class="btn btn-ghost" id="emailLater" type="button">Not now</button>' +
+        '<button class="btn btn-primary" id="emailSave" type="button">Save</button>' +
+      "</div>"
+    );
+    document.getElementById("emailLater").addEventListener("click", closeModal);
+    document.getElementById("emailSave").addEventListener("click", async function () {
+      var v = document.getElementById("emailCatchup").value.trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { showToast("That doesn't look like an email address."); return; }
+      this.disabled = true;
+      try {
+        var res = await fetch(EMAIL_FN, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + SUPABASE_ANON_KEY },
+          body: JSON.stringify({ email: v })
+        });
+        if (!res.ok) throw new Error("http " + res.status);
+        currentUser.meta = currentUser.meta || {};
+        currentUser.meta.email = v;
+        showToast("Email saved to your account.");
+        closeModal();
+      } catch (e) {
+        this.disabled = false;
+        showToast("Couldn't save — the email service isn't deployed yet.");
+      }
+    });
+  }
+
   function isManager() {
     return !!(currentUser && currentUser.username === MANAGER_USERNAME);
   }
@@ -1061,7 +1103,7 @@
 
   /* ---------------- session / boot ---------------- */
   function showApp(user) {
-    currentUser = { id: user.id, username: emailToUsername(user.email, user.user_metadata && user.user_metadata.username) };
+    currentUser = { id: user.id, username: emailToUsername(user.email, user.user_metadata && user.user_metadata.username) , meta: user.user_metadata || {} };
     document.getElementById("whoami").textContent = currentUser.username;
     var logoutBtn = document.getElementById("logoutBtn");
     logoutBtn.hidden = false;
@@ -1071,6 +1113,7 @@
     try { loadLocalFallback(); } catch (e) {}
     refreshBanners();
     startBannerPolling();
+    setTimeout(maybePromptEmail, 1500);
     if (isManager()) {
       managerLoadUsers().then(function () {
         buildManagerBar();
