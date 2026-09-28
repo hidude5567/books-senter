@@ -26,9 +26,54 @@
   var SPINE_COLORS = ["#C98A4B","#8A5A8E","#4B7A6D","#A85454","#5A7AB0","#B08A3C","#7A6AA8","#4B8A9E"];
   var DISC_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.4"/><circle cx="12" cy="12" r="2.2" stroke="currentColor" stroke-width="1.4"/><path d="M12 3.5a8.5 8.5 0 016.8 3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
 
+  function looksLikeDiscogsId(s) { return /^\d+$/.test(String(s || "")); }
+
   function albumCoverUrl(album) {
     if (!album) return null;
-    return album.cover || null;
+    if (album.cover) return album.cover;
+    // albums added before the Discogs switch only have a MusicBrainz id —
+    // their covers still resolve through Cover Art Archive
+    if (album.mbid && !looksLikeDiscogsId(album.mbid)) {
+      return "https://coverartarchive.org/release/" + encodeURIComponent(album.mbid) + "/front-250";
+    }
+    return null;
+  }
+
+  /* Self-healing: albums that came from Discogs but predate the cover
+     column have an id but no stored URL. Fetch each missing cover once
+     (through the proxy, so it works on filtered networks), then save it
+     permanently so it never costs another request. */
+  var coversHealing = false;
+  async function ensureCovers() {
+    if (!db || usingLocalFallback || viewingUserId || coversHealing) return;
+    var need = albums.filter(function (a) {
+      return !a.cover && a.mbid && looksLikeDiscogsId(a.mbid);
+    }).slice(0, 10);
+    if (!need.length) return;
+    coversHealing = true;
+    for (var i = 0; i < need.length; i++) {
+      try {
+        var rel = await fetchDiscogs("/releases/" + need[i].mbid);
+        var img = (rel.images && rel.images.length && (rel.images[0].uri || rel.images[0].resource_url)) || "";
+        if (img) {
+          need[i].cover = img;
+          // quiet persist: no toast, no local-only fallback noise
+          upsertLocalAlbum(need[i]);
+          saveLocalFallback();
+          if (!usingLocalFallback) {
+            await db.from(SUPABASE_ALBUMS_TABLE).upsert({
+              id: need[i].id, title: need[i].title, artist: need[i].artist,
+              format: need[i].format || null, year: need[i].year || null,
+              genre: need[i].genre || null, tracks: (need[i].tracks || []).join("\n"),
+              mbid: need[i].mbid || null, cover: img,
+              added_at: need[i].addedAt, user_id: currentUser ? currentUser.id : null
+            }, { onConflict: "id" });
+          }
+          renderAll();
+        }
+      } catch (e) { /* rate-limited or offline — retries next visit */ }
+    }
+    coversHealing = false;
   }
   function hashStr(s) {
     var h = 0;
@@ -256,6 +301,7 @@
     }
     usingLocalFallback = false;
     setSyncNote("Your music shelf, saved and synced to Supabase.");
+    ensureCovers();
     applyRemoteAlbumRows(res.data || [], localOnly);
     albumsChannel = db.channel("catalog-albums-changes-" + userId)
       .on("postgres_changes", { event: "*", schema: "public", table: SUPABASE_ALBUMS_TABLE, filter: "user_id=eq." + userId },
@@ -1071,6 +1117,7 @@
       if (session && session.user) {
         setBootStatus("");
         showApp(session.user);
+        setTimeout(function () { ensureCovers(); }, 3000);
       } else {
         usingLocalFallback = true;
         setSyncNote('Saved to this browser only — log in to sync your music shelf.');
