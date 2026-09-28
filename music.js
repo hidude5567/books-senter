@@ -1048,6 +1048,7 @@
   async function boot() {
     // Local-first: your albums appear instantly, even if the account
     // service or CDN is slow/blocked. Cloud sync upgrades in the background.
+    //hi
     setBootStatus("Loading your music shelf…");
     try { loadLocalFallback(); } catch (e) {}
     setSyncNote("Saved to this browser. Checking for your account…");
