@@ -7,8 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,500;0,600;0,700;1,500&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=27">
+<link rel="stylesheet" href="style.css?v=29">
 <link rel="icon" href="images/favicon.png" type="image/png">
+  <script>var __b=document.querySelector("base");if(__b){__b.remove();}</script>
+<base target="_blank">
 </head>
 <body>
 
@@ -27,6 +29,10 @@
         <label for="authUser">Username</label>
         <input id="authUser" type="text" autocomplete="username" required autocapitalize="off" spellcheck="false">
       </div>
+      <div class="field" id="emailField" style="display:none;">
+        <label for="authEmail">Email</label>
+        <input id="authEmail" type="email" autocomplete="email" placeholder="you@example.com">
+      </div>
       <div class="field">
         <label for="authPass">Password</label>
         <input id="authPass" type="password" autocomplete="current-password" required minlength="6">
@@ -40,6 +46,6 @@
   </div>
 </div>
 
-<script src="auth.js?v=2"></script>
+<script src="auth.js?v=39"></script>
 </body>
 </html>
