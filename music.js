@@ -724,6 +724,18 @@
   }
 
   /* ---------------- send a banner ---------------- */
+  function fallbackCopy(text, btn) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); btn.textContent = "Copied!"; } catch (e) { btn.textContent = "Select + Ctrl-C"; }
+    setTimeout(function () { btn.textContent = "Copy SQL"; }, 2000);
+    ta.remove();
+  }
+
   function openComposeModal() {
     openModal(
       '<h2 id="modalTitle">Send a banner</h2>' +
@@ -734,8 +746,9 @@
       "</select></div>" +
       '<div class="field"><label for="msgBody">Message</label><input id="msgBody" type="text" maxlength="300" placeholder="e.g. Catalog updated — new albums added!"></div>' +
       '<details class="email-sql"><summary>Email everyone instead (get the mailing list)</summary>' +
-        '<p class="modal-sub" style="margin:0.5rem 0 0.4rem;">Run this in the Supabase SQL Editor, then copy the email column into the BCC field of a normal email:</p>' +
-        '<pre class="mono email-sql-pre">' + escapeHtml("select raw_user_meta_data->>'username' as username,\n       coalesce(raw_user_meta_data->>'email', '') as email\nfrom auth.users order by username;") + '</pre>' +
+        '<p class="modal-sub" style="margin:0.5rem 0 0.4rem;">Run this in the Supabase SQL Editor. You get ONE cell with every email, comma-separated — click that cell, copy, and paste straight into the BCC field in Gmail:</p>' +
+        '<div class="email-sql-row"><pre class="mono email-sql-pre" id="emailSqlPre">' + escapeHtml("select string_agg(coalesce(raw_user_meta_data->>'email',''), ', ') as emails\nfrom auth.users\nwhere coalesce(raw_user_meta_data->>'email','') <> '';") + '</pre>' +
+        '<button class="btn btn-ghost email-copy" id="emailCopyBtn" type="button">Copy SQL</button></div>' +
       "</details>" +
       '<div class="form-actions">' +
         '<button class="btn btn-ghost" id="msgCancel" type="button">Cancel</button>' +
@@ -743,6 +756,20 @@
       "</div>"
     );
     document.getElementById("msgCancel").addEventListener("click", closeModal);
+    var copyBtn = document.getElementById("emailCopyBtn");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", function () {
+        var txt = document.getElementById("emailSqlPre").textContent;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(function () {
+            copyBtn.textContent = "Copied!";
+            setTimeout(function () { copyBtn.textContent = "Copy SQL"; }, 2000);
+          }).catch(function () { fallbackCopy(txt, copyBtn); });
+        } else {
+          fallbackCopy(txt, copyBtn);
+        }
+      });
+    }
     document.getElementById("msgBody").focus();
     document.getElementById("msgSend").addEventListener("click", async function () {
       var body = document.getElementById("msgBody").value.trim();
