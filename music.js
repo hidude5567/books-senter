@@ -148,6 +148,7 @@
   var managerUsers = [];    // [{user_id, username}] — accounts seen in albums
   var viewingUserId = null; // manager: whose shelf is on screen (null = own)
   var musicView = "collection"; // "collection" | "wishlist"
+  var managerEditing = false; // manager: editing another user's shelf?
   var currentUser = null;
   // Each account gets its OWN browser stash. Without this, two people using
   // the same device/browser would leak albums into each other's shelves via
@@ -322,7 +323,7 @@
   }
 
   async function persistAlbum(album) {
-    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
+    if (viewingUserId && !managerEditing) { showToast("Read-only — hit \"Edit this shelf\" in the manager bar first."); return; }
     upsertLocalAlbum(album);
     saveLocalFallback();
     renderAll();
@@ -335,7 +336,8 @@
       cover: album.cover || null,
       username: currentUser ? currentUser.username : (album.username || null),
       wishlist: !!album.wishlist,
-      added_at: album.addedAt, user_id: currentUser ? currentUser.id : null
+      added_at: album.addedAt,
+      user_id: viewingUserId && managerEditing ? viewingUserId : (currentUser ? currentUser.id : null)
     };
     var res;
     try {
@@ -350,13 +352,14 @@
   }
 
   async function deleteAlbumById(id) {
-    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
+    if (viewingUserId && !managerEditing) { showToast("Read-only — hit \"Edit this shelf\" in the manager bar first."); return; }
     removeLocalAlbum(id);
     saveLocalFallback();
     renderAll();
     if (usingLocalFallback || !db) return;
     var delQuery = db.from(SUPABASE_ALBUMS_TABLE).delete().eq("id", id);
-    if (currentUser) delQuery = delQuery.eq("user_id", currentUser.id);
+    var scopeId = viewingUserId && managerEditing ? viewingUserId : (currentUser ? currentUser.id : null);
+    if (scopeId) delQuery = delQuery.eq("user_id", scopeId);
     await delQuery;
   }
 
@@ -712,11 +715,29 @@
     bar.innerHTML =
       '<span class="mono manager-label">MANAGER</span>' +
       '<select id="mgrUserSel" aria-label="View a user shelf">' + opts + "</select>" +
+      '<button class="btn btn-ghost" id="mgrEditBtn" hidden>Edit this shelf</button>' +
       '<button class="btn btn-ghost" id="mgrMessagesBtn">Send banner</button>';
     var searchRow = document.querySelector(".search-row");
     searchRow.parentNode.insertBefore(bar, searchRow.nextSibling);
+    document.getElementById("mgrEditBtn").addEventListener("click", function () {
+      managerEditing = !managerEditing;
+      this.textContent = managerEditing ? "Stop editing" : "Edit this shelf";
+      this.classList.toggle("btn-primary", managerEditing);
+      this.classList.toggle("btn-ghost", !managerEditing);
+      setSyncNote(managerEditing
+        ? "Editing another account's shelf (manager mode) — saves go to their collection."
+        : "Viewing another account's shelf (manager mode) — read-only.");
+    });
     document.getElementById("mgrUserSel").addEventListener("change", function () {
       var v = this.value;
+      managerEditing = false;
+      var eb = document.getElementById("mgrEditBtn");
+      if (eb) {
+        eb.hidden = !v;
+        eb.textContent = "Edit this shelf";
+        eb.classList.remove("btn-primary");
+        eb.classList.add("btn-ghost");
+      }
       if (!v) {
         viewingUserId = null;
         loadLocalFallback();
