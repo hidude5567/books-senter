@@ -337,10 +337,15 @@
       wishlist: !!album.wishlist,
       added_at: album.addedAt, user_id: currentUser ? currentUser.id : null
     };
-    var res = await db.from(SUPABASE_ALBUMS_TABLE).upsert(row, { onConflict: "id" });
+    var res;
+    try {
+      res = await db.from(SUPABASE_ALBUMS_TABLE).upsert(row, { onConflict: "id" });
+    } catch (e) {
+      res = { error: { message: String((e && e.message) || e) } };
+    }
     if (res.error) {
-      console.warn("The Catalog: album sync failed — kept in this browser.");
-      setSyncNote("Saved to this browser (cloud sync for albums failed — is the 'albums' table set up in Supabase?).");
+      console.warn("The Catalog: album sync failed:", res.error, "row:", row);
+      setSyncNote("Album sync failed: " + (res.error.message || "unknown") + " — saved to this browser meanwhile.");
     }
   }
 
