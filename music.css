@@ -705,3 +705,7 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
   cursor: pointer;
 }
 .wish-check input { width: auto; }
+
+.email-sql-row { display: flex; align-items: flex-start; gap: 0.5rem; }
+.email-sql-pre { flex: 1; margin: 0; }
+.email-copy { flex: none; font-size: 0.78rem; padding: 0.4rem 0.7rem; }
