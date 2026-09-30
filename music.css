@@ -658,3 +658,50 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; }
 }
 .boot-status[hidden] { display: none; }
 .boot-status-error { background: var(--burgundy); color: var(--paper-raised); }
+
+.email-sql { margin: 0 0 0.6rem; font-size: 0.82rem; color: var(--ink-soft); }
+.email-sql summary { cursor: pointer; font-family: 'Courier Prime', monospace; }
+.email-sql summary:hover { color: var(--ink); }
+.email-sql-pre {
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.72rem;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink);
+}
+
+/* ---------- collection / wishlist subtabs ---------- */
+.music-subtabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: -1.4rem 0 1.4rem;
+}
+.music-subtab {
+  background: var(--paper);
+  border: 1px solid var(--paper-line);
+  border-radius: 20px;
+  padding: 0.35rem 1rem;
+  font-family: 'Courier Prime', monospace;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+.music-subtab:hover { color: var(--ink); border-color: var(--ink-soft); }
+.music-subtab.active {
+  background: var(--forest);
+  border-color: var(--forest);
+  color: var(--paper-raised);
+  font-weight: 700;
+}
+
+.wish-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+.wish-check input { width: auto; }
