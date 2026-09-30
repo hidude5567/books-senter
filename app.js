@@ -81,6 +81,7 @@
   var MANAGER_USERNAME = "nolanwsenter";
   var managerUsers = [];
   var viewingUserId = null;
+  var managerEditing = false; // manager: editing another user's shelf?
   var albumsChannel = null;
 
   var SUPABASE_URL = "https://wgyrpvrzafubezcxqrzy.supabase.co";
@@ -88,6 +89,7 @@
   var MANAGER_USERNAME = "nolanwsenter";
   var managerUsers = [];
   var viewingUserId = null;
+  var managerEditing = false; // manager: editing another user's shelf?
 
   var SUPABASE_TABLE = "books";
   var SUPABASE_ALBUMS_TABLE = "albums";
@@ -326,7 +328,7 @@
   }
 
   async function persistBook(book) {
-    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
+    if (viewingUserId && !managerEditing) { showToast("Read-only — hit \"Edit this shelf\" in the manager bar first."); return; }
     if (usingLocalFallback || !db) {
       upsertLocalBook(book); saveLocalFallback(); renderAll(); return;
     }
@@ -335,7 +337,8 @@
       genre: book.genre || null, isbn: book.isbn || null,
       quantity: book.quantity || 1,
       username: currentUser ? currentUser.username : (book.username || null),
-      added_at: book.addedAt, user_id: currentUser ? currentUser.id : null
+      added_at: book.addedAt,
+      user_id: viewingUserId && managerEditing ? viewingUserId : (currentUser ? currentUser.id : null)
     };
     var res = await db.from(SUPABASE_TABLE).upsert(row, { onConflict: "id" });
     if (res.error) { showToast("Couldn't save — try again."); return; }
@@ -343,12 +346,13 @@
   }
 
   async function deleteBookById(id) {
-    if (viewingUserId) { showToast("Manager view is read-only — switch back to your shelf to edit."); return; }
+    if (viewingUserId && !managerEditing) { showToast("Read-only — hit \"Edit this shelf\" in the manager bar first."); return; }
     if (usingLocalFallback || !db) {
       removeLocalBook(id); saveLocalFallback(); renderAll(); return;
     }
     var delQuery = db.from(SUPABASE_TABLE).delete().eq("id", id);
-    if (currentUser) delQuery = delQuery.eq("user_id", currentUser.id);
+    var scopeId = viewingUserId && managerEditing ? viewingUserId : (currentUser ? currentUser.id : null);
+    if (scopeId) delQuery = delQuery.eq("user_id", scopeId);
     var res = await delQuery;
     if (res.error) { showToast("Couldn't remove — try again."); return; }
     removeLocalBook(id); saveLocalFallback(); renderAll();
@@ -1060,11 +1064,29 @@
     bar.innerHTML =
       '<span class="mono manager-label">MANAGER</span>' +
       '<select id="mgrUserSel" aria-label="View a user shelf"><option value="">My shelf</option></select>' +
+      '<button class="btn btn-ghost" id="mgrEditBtn" hidden>Edit this shelf</button>' +
       '<button class="btn btn-ghost" id="mgrSendBtn">Send banner</button>';
     var searchRow = document.querySelector(".search-row");
     searchRow.parentNode.insertBefore(bar, searchRow.nextSibling);
+    document.getElementById("mgrEditBtn").addEventListener("click", function () {
+      managerEditing = !managerEditing;
+      this.textContent = managerEditing ? "Stop editing" : "Edit this shelf";
+      this.classList.toggle("btn-primary", managerEditing);
+      this.classList.toggle("btn-ghost", !managerEditing);
+      setSyncNote(managerEditing
+        ? "Editing another account's shelf (manager mode) — saves go to their collection."
+        : "Viewing another account's shelf (manager mode) — read-only.");
+    });
     document.getElementById("mgrUserSel").addEventListener("change", function () {
       var v = this.value;
+      managerEditing = false;
+      var eb = document.getElementById("mgrEditBtn");
+      if (eb) {
+        eb.hidden = !v;
+        eb.textContent = "Edit this shelf";
+        eb.classList.remove("btn-primary");
+        eb.classList.add("btn-ghost");
+      }
       if (!v) {
         viewingUserId = null;
         try { loadLocalFallback(); } catch (e) {}
