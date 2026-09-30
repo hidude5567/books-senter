@@ -147,6 +147,7 @@
   var anonLocalKey = "catalog-albums-local-anon-v1";
   var managerUsers = [];    // [{user_id, username}] — accounts seen in albums
   var viewingUserId = null; // manager: whose shelf is on screen (null = own)
+  var musicView = "collection"; // "collection" | "wishlist"
   var currentUser = null;
   // Each account gets its OWN browser stash. Without this, two people using
   // the same device/browser would leak albums into each other's shelves via
@@ -253,6 +254,7 @@
         mbid: r.mbid || "",
         cover: r.cover || "",
         username: r.username || "",
+        wishlist: !!r.wishlist,
         addedAt: r.added_at || r.addedAt || new Date().toISOString()
       };
     });
@@ -332,6 +334,7 @@
       mbid: album.mbid || null,
       cover: album.cover || null,
       username: currentUser ? currentUser.username : (album.username || null),
+      wishlist: !!album.wishlist,
       added_at: album.addedAt, user_id: currentUser ? currentUser.id : null
     };
     var res = await db.from(SUPABASE_ALBUMS_TABLE).upsert(row, { onConflict: "id" });
@@ -374,6 +377,34 @@
      giving up on the placeholder icon. */
 
   /* ---------------- manager mode ---------------- */
+
+  function buildMusicSubtabs() {
+    if (document.getElementById("musicSubtabs")) return;
+    var bar = document.createElement("div");
+    bar.id = "musicSubtabs";
+    bar.className = "music-subtabs";
+    bar.setAttribute("role", "tablist");
+    bar.innerHTML =
+      '<button type="button" class="music-subtab active" data-view="collection" role="tab">Collection</button>' +
+      '<button type="button" class="music-subtab" data-view="wishlist" role="tab">Wishlist</button>';
+    var searchRow = document.querySelector(".search-row");
+    searchRow.parentNode.insertBefore(bar, searchRow);
+    Array.prototype.forEach.call(bar.querySelectorAll(".music-subtab"), function (b) {
+      b.addEventListener("click", function () { setMusicView(b.getAttribute("data-view")); });
+    });
+  }
+
+  function setMusicView(view) {
+    musicView = view === "wishlist" ? "wishlist" : "collection";
+    try { localStorage.setItem("catalog-music-view", musicView); } catch (e) {}
+    Array.prototype.forEach.call(document.querySelectorAll(".music-subtab"), function (b) {
+      var on = b.getAttribute("data-view") === musicView;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on);
+    });
+    renderAll();
+  }
+
   function formatShort(f) {
     if (!f) return "—";
     if (f === "Vinyl") return "VINYL";
@@ -422,26 +453,33 @@
     renderAlbums();
   }
 
+  function inCurrentView(a) {
+    return musicView === "wishlist" ? !!a.wishlist : !a.wishlist;
+  }
+
   function renderAlbums() {
     var query = document.getElementById("searchInput").value.trim();
     var format = document.getElementById("formatFilter").value;
-    var filtered = albums.filter(function (a) { return matchesAlbumFilters(a, query, format); });
+    var pool = albums.filter(inCurrentView);
+    var filtered = pool.filter(function (a) { return matchesAlbumFilters(a, query, format); });
     filtered.sort(function (a, b) { return (a.title || "").localeCompare(b.title || ""); });
 
     var grid = document.getElementById("grid");
     var countEl = document.getElementById("shelfCount");
 
-    if (albums.length === 0) {
+    if (pool.length === 0) {
       countEl.textContent = "";
-      grid.innerHTML = '<div class="empty-state"><h3>No albums yet</h3><p>Add your first CD or record — track lists included — to start the music shelf.</p></div>';
+      grid.innerHTML = musicView === "wishlist"
+        ? '<div class="empty-state"><h3>Your wishlist is empty</h3><p>Add albums you want — tick "On my wishlist" when creating one.</p></div>'
+        : '<div class="empty-state"><h3>No albums yet</h3><p>Add your first CD or record — track lists included — to start the music shelf.</p></div>';
       return;
     }
     if (filtered.length === 0) {
-      countEl.textContent = albums.length + (albums.length === 1 ? " album in the collection" : " albums in the collection");
+      countEl.textContent = pool.length + (pool.length === 1 ? " album" : " albums") + (musicView === "wishlist" ? " on the wishlist" : " in the collection");
       grid.innerHTML = '<div class="empty-state"><h3>No matches</h3><p>Try a different search — song titles count too.</p></div>';
       return;
     }
-    countEl.textContent = filtered.length + " of " + albums.length + (albums.length === 1 ? " album" : " albums") + " shown";
+    countEl.textContent = filtered.length + " of " + pool.length + (pool.length === 1 ? " album" : " albums") + (musicView === "wishlist" ? " on the wishlist" : " in the collection") + " shown";
 
     grid.innerHTML = filtered.map(function (a, i) {
       var color = spineColor(a.genre || a.format);
@@ -451,7 +489,7 @@
           '<div class="card-cover album-cover">' +
             '<div class="cover-fallback">' + DISC_ICON_SVG + '</div>' +
             (cover ? '<img class="cover-img" src="' + cover + '" alt="" loading="lazy">' : '') +
-            '<div class="card-tab mono">' + escapeHtml(formatShort(a.format)) + "</div>" +
+            '<div class="card-tab mono">' + escapeHtml(a.wishlist ? "WISHLIST" : formatShort(a.format)) + "</div>" +
             '<div class="card-actions">' +
               '<button class="icon-btn edit-btn" data-id="' + a.id + '" aria-label="Edit ' + escapeHtml(a.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M13.5 3.5l3 3-9 9-3.6.6.6-3.6 9-9z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>' +
               '<button class="icon-btn del-btn" data-id="' + a.id + '" aria-label="Remove ' + escapeHtml(a.title) + '"><svg viewBox="0 0 20 20" fill="none"><path d="M4 6h12M8 6V4.5h4V6M6 6l.7 9.5A1 1 0 007.7 16.5h4.6a1 1 0 001-1L14 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>' +
@@ -529,9 +567,10 @@
           (addedStr ? '<p class="view-added">Added ' + addedStr + "</p>" : "") +
           '<p class="view-added discogs-link-row"><a class="discogs-link" href="' + escapeHtml(discogsReleaseUrl(a) || "https://www.discogs.com/search/") + '" target="_blank" rel="noopener">Check on Discogs ↗</a></p>' +
           '<div class="form-actions">' +
+            (a.wishlist ? '<button type="button" class="btn btn-primary" id="viewGotBtn">Got it — move to my collection</button>' : "") +
             '<button type="button" class="btn btn-danger" id="viewDeleteBtn">Remove</button>' +
             '<button type="button" class="btn btn-ghost" id="viewCloseBtn">Close</button>' +
-            '<button type="button" class="btn btn-primary" id="viewEditBtn">Edit</button>' +
+            '<button type="button" class="btn btn-ghost" id="viewEditBtn">Edit</button>' +
           "</div>" +
         "</div>" +
       "</div>"
@@ -539,6 +578,15 @@
     armCoverImages(document.getElementById("modalBody"));
     document.getElementById("viewCloseBtn").addEventListener("click", closeModal);
     document.getElementById("viewEditBtn").addEventListener("click", function () { openAlbumEditForm(a.id); });
+    var gotBtn = document.getElementById("viewGotBtn");
+    if (gotBtn) {
+      gotBtn.addEventListener("click", function () {
+        a.wishlist = false;
+        persistAlbum(a);
+        showToast('"' + a.title + '" moved to your collection.');
+        closeModal();
+      });
+    }
     document.getElementById("viewDeleteBtn").addEventListener("click", function () {
       if (confirm('Remove "' + a.title + '" from the music shelf?')) {
         deleteAlbumById(a.id);
@@ -685,6 +733,10 @@
         managerUsers.map(function (u) { return '<option value="' + escapeHtml(u.user_id) + '">' + escapeHtml(u.username) + "</option>"; }).join("") +
       "</select></div>" +
       '<div class="field"><label for="msgBody">Message</label><input id="msgBody" type="text" maxlength="300" placeholder="e.g. Catalog updated — new albums added!"></div>' +
+      '<details class="email-sql"><summary>Email everyone instead (get the mailing list)</summary>' +
+        '<p class="modal-sub" style="margin:0.5rem 0 0.4rem;">Run this in the Supabase SQL Editor, then copy the email column into the BCC field of a normal email:</p>' +
+        '<pre class="mono email-sql-pre">' + escapeHtml("select raw_user_meta_data->>'username' as username,\n       coalesce(raw_user_meta_data->>'email', '') as email\nfrom auth.users order by username;") + '</pre>' +
+      "</details>" +
       '<div class="form-actions">' +
         '<button class="btn btn-ghost" id="msgCancel" type="button">Cancel</button>' +
         '<button class="btn btn-primary" id="msgSend" type="button">Send banner</button>' +
@@ -856,6 +908,7 @@
           '<datalist id="musicGenreOptions">' + MUSIC_GENRE_SUGGESTIONS.map(function (g) { return '<option value="' + g + '">'; }).join("") + "</datalist>" +
         "</div>" +
         '<div class="field"><label for="aTracks">Songs (one per line)</label><textarea id="aTracks" rows="8" placeholder="1. Song One&#10;2. Song Two&#10;3. Song Three">' + escapeHtml(tracks) + "</textarea></div>" +
+        '<div class="field wish-field"><label class="wish-check"><input type="checkbox" id="aWishlist"' + ((prefill && prefill.wishlist) ? " checked" : "") + '> On my wishlist — I don\'t own this yet</label></div>' +
         '<div class="field"><label for="aCover">Cover image URL</label><input id="aCover" type="text" value="' + escapeHtml((prefill && prefill.cover) || "") + '" placeholder="https://… (auto-filled from Discogs; paste any image link)">' +
           '<div class="field-hint">Leave blank to use the record-icon placeholder.</div>' +
         "</div>" +
@@ -905,6 +958,7 @@
         tracks: trackList,
         mbid: (prefill && prefill.mbid) || "",
         cover: coverUrl,
+        wishlist: document.getElementById("aWishlist").checked,
         ownerId: (prefill && prefill.ownerId) || (currentUser ? currentUser.id : null),
         addedAt: (prefill && prefill.addedAt) || new Date().toISOString()
       };
@@ -1179,5 +1233,7 @@
     }
   }
   populateFormatFilter();
+  buildMusicSubtabs();
+  try { if (localStorage.getItem("catalog-music-view") === "wishlist") setMusicView("wishlist"); } catch (e) {}
   boot();
 })();
