@@ -891,12 +891,22 @@
   function loadZXing() {
     if (window.ZXing) return Promise.resolve(window.ZXing);
     if (zxingLoadPromise) return zxingLoadPromise;
+    // try several CDNs — school networks often block one but not another
+    var cdns = [
+      "https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.20.0/index.min.js",
+      "https://cdn.jsdelivr.net/npm/zxing-library@0.20.0/umd/index.min.js",
+      "https://unpkg.com/zxing-library@0.20.0/umd/index.min.js"
+    ];
     zxingLoadPromise = new Promise(function (resolve, reject) {
-      var s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.20.0/index.min.js";
-      s.onload = function () { resolve(window.ZXing || null); };
-      s.onerror = function () { reject(new Error("zxing load failed")); };
-      document.head.appendChild(s);
+      var i = 0;
+      (function tryNext() {
+        if (i >= cdns.length) { reject(new Error("zxing load failed")); return; }
+        var s = document.createElement("script");
+        s.src = cdns[i++];
+        s.onload = function () { resolve(window.ZXing || null); };
+        s.onerror = function () { tryNext(); };
+        document.head.appendChild(s);
+      })();
     });
     return zxingLoadPromise;
   }
@@ -908,7 +918,7 @@
       '<h2 id="modalTitle">Scan the barcode</h2>' +
       '<p class="modal-sub">Line the barcode up in the frame. If your camera won\'t cooperate, you can always type the number in below.</p>' +
       '<div class="scan-wrap" id="scanWrap">' +
-        '<video id="scanVideo" playsinline muted></video>' +
+        '<video id="scanVideo" playsinline webkit-playsinline autoplay muted></video>' +
         '<div class="scan-frame"></div><div class="scan-line"></div>' +
       "</div>" +
       '<p class="status-line" id="scanStatus"><span class="spinner"></span> Starting camera…</p>' +
@@ -936,32 +946,60 @@
   async function startScanner() {
     var statusEl = document.getElementById("scanStatus");
     var video = document.getElementById("scanVideo");
+
+    // iOS Safari requires these as real attributes/properties for inline
+    // camera playback — the HTML attributes alone sometimes aren't enough
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
+    video.muted = true;
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       statusEl.innerHTML = "Camera access isn't available here — type the number below instead.";
       return;
     }
+    // prefer the back camera, but accept any camera — some iOS webviews
+    // reject a hard facingMode request
     try {
-      activeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      activeStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false
+      });
     } catch (e) {
-      statusEl.innerHTML = "Couldn't get to the camera (permission denied or unavailable) — type the number below instead.";
-      return;
+      try {
+        activeStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      } catch (e2) {
+        statusEl.innerHTML = "Couldn't get to the camera (permission denied or unavailable — on iPhone, make sure to tap \"Allow\" when asked) — or type the number below instead.";
+        return;
+      }
     }
     video.srcObject = activeStream;
-    await video.play().catch(function () {});
+    try { await video.play(); } catch (e3) {}
     statusEl.innerHTML = '<span class="spinner"></span> Watching for a barcode…';
 
+    // Native detector — the fast path on iPhone (Safari 17+). iOS throws
+    // if you hand it a format it doesn't support (upc_a/upc_e aren't in
+    // its list — UPCs arrive as ean_13), so build the detector from the
+    // device's ACTUAL supported formats and never hardcode the list.
     if ("BarcodeDetector" in window) {
       try {
-        var detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e"] });
+        var wanted = ["ean_13", "ean_8", "code_128", "code_39", "itf", "qr_code"];
+        var supported = [];
+        if (window.BarcodeDetector.getSupportedFormats) {
+          supported = await window.BarcodeDetector.getSupportedFormats();
+        }
+        var use = supported.length
+          ? wanted.filter(function (f) { return supported.indexOf(f) !== -1; })
+          : wanted;
+        var detector = new window.BarcodeDetector(use.length ? { formats: use } : undefined);
         window._catalogScanTimer = setInterval(async function () {
-          if (!activeStream) return;
+          if (!activeStream || video.readyState < 2) return; // wait for real frames
           try {
             var codes = await detector.detect(video);
             if (codes && codes.length) onBarcodeFound(codes[0].rawValue, statusEl);
-          } catch (e2) {}
-        }, 400);
+          } catch (e4) { /* keep scanning */ }
+        }, 350);
         return;
-      } catch (e3) {}
+      } catch (e5) { /* fall through to ZXing */ }
     }
 
     try {
